@@ -22,6 +22,7 @@ class AnalysisRegistrationTests {
         var repository = new AnalysisRepository() {
             public void save(Analysis value) { saved.put(value.id(), value); }
             public Optional<Analysis> get(UUID id) { return Optional.ofNullable(saved.get(id)); }
+            public com.smartsca.application.port.inbound.ListAnalysesUseCase.Page list(String project, AnalysisStatus status, int offset) { throw new UnsupportedOperationException(); }
             public Optional<Analysis> claimNextPending() { return Optional.empty(); }
             public void updateStep(UUID id, String step) { }
             public void finish(Analysis value) { saved.put(value.id(), value); }
@@ -29,6 +30,10 @@ class AnalysisRegistrationTests {
         };
         var start = new StartAnalysisService(source, repository, "test");
         var query = new QueryAnalysisService(repository);
+        assertThrows(IllegalArgumentException.class, () -> query.list("../sample", null, 0));
+        assertThrows(IllegalArgumentException.class, () -> query.list("x".repeat(65), null, 0));
+        assertThrows(IllegalArgumentException.class, () -> query.list(null, null, -1));
+        assertThrows(IllegalArgumentException.class, () -> query.list(null, null, 10001));
         var defaults = AnalysisConfiguration.defaults();
         assertEquals("Sample", start.listProjects().getFirst().name());
         assertThrows(IllegalArgumentException.class, () -> start.start("../sample", defaults));

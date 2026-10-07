@@ -28,6 +28,7 @@ class AnalysisWorkerTests {
         }
         public void save(Analysis value) { records.put(value.id(), value); }
         public Optional<Analysis> get(UUID id) { return Optional.ofNullable(records.get(id)); }
+        public com.smartsca.application.port.inbound.ListAnalysesUseCase.Page list(String project, AnalysisStatus status, int offset) { throw new UnsupportedOperationException(); }
         public Optional<Analysis> claimNextPending() {
             var request = queue.poll();
             if (request == null) return Optional.empty();

@@ -28,7 +28,7 @@ public class AnalysisConfigurationBeans {
         String version = SmartScaApplication.class.getPackage().getImplementationVersion();
         return new StartAnalysisService(projects, analyses, version == null ? "development" : version);
     }
-    @Bean GetAnalysisUseCase queryAnalysis(AnalysisRepository analyses) { return new QueryAnalysisService(analyses); }
+    @Bean QueryAnalysisService queryAnalysis(AnalysisRepository analyses) { return new QueryAnalysisService(analyses); }
     @Bean DependencyResolver dependencyResolver(@Value("${smartsca.fixtures-root}") String root,
                                                 @Value("${smartsca.maven.timeout-seconds:180}") long seconds) {
         return new MavenDependencyResolver(new FixtureProjectSource(Path.of(root)), Duration.ofSeconds(seconds));

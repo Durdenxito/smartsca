@@ -1,17 +1,26 @@
 package com.smartsca.application.service;
 
 import com.smartsca.application.port.inbound.GetAnalysisUseCase;
+import com.smartsca.application.port.inbound.ListAnalysesUseCase;
+import com.smartsca.domain.analysis.AnalysisStatus;
 import com.smartsca.application.port.outbound.AnalysisRepository;
 import com.smartsca.domain.analysis.Analysis;
 import java.util.NoSuchElementException;
 import java.util.UUID;
 
 /** Reads the persisted request, including after an application restart. */
-public final class QueryAnalysisService implements GetAnalysisUseCase {
+public final class QueryAnalysisService implements GetAnalysisUseCase, ListAnalysesUseCase {
     private final AnalysisRepository analyses;
     public QueryAnalysisService(AnalysisRepository analyses) { this.analyses = analyses; }
     @Override public Analysis get(UUID id) {
         return analyses.get(id).orElseThrow(() -> new NoSuchElementException("El análisis no existe."));
+    }
+    @Override public Page list(String projectId, AnalysisStatus status, int offset) {
+        String project = projectId == null || projectId.isBlank() ? null : projectId.strip();
+        if (project != null && !project.matches("[a-z0-9][a-z0-9-]{0,63}"))
+            throw new IllegalArgumentException("Identificador de proyecto inválido.");
+        if (offset < 0 || offset > MAX_OFFSET) throw new IllegalArgumentException("Offset del historial fuera de límite (0–10000).");
+        return analyses.list(project, status, offset);
     }
     private com.smartsca.domain.component.DependencyGraph snapshot(UUID id) {
         var graph = get(id).dependencyGraph();

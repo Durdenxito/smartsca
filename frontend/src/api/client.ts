@@ -40,6 +40,12 @@ export interface Analysis {
     missingEvidenceRules: string[]; tieBreakRules: string[]; cvssSelection: string; calculator: string }; evaluatedAt: string; assessments: RiskAssessment[] } | null;
 }
 
+export interface AnalysisHistory {
+  items: { id: string; projectId: string; projectName: string; sourceReference: string; analyzedReference: string;
+    configuration: AnalysisConfiguration; status: Analysis['status']; createdAt: string; startedAt: string | null; finishedAt: string | null }[];
+  offset: number; nextOffset: number | null; navigationLimited: boolean;
+}
+
 export interface RiskAssessment {
   finding: { componentPurl: string; vulnerabilityId: string }; policyVersion: string;
   status: 'EVALUADO' | 'PENDIENTE_REVISION'; score: number | null; level: 'CRITICA' | 'ALTA' | 'MEDIA' | 'BAJA' | null;
