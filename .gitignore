@@ -1,0 +1,15 @@
+**/target/
+**/node_modules/
+**/dist/
+*.log
+.env
+.env.*
+!.env.example
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+/build/
+**/__pycache__/
+**/test-results/
+**/playwright-report/

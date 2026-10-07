@@ -1,0 +1,12 @@
+{
+  "name": "smartsca-documentation-tools",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "typedoc": "0.28.20",
+    "typescript": "6.0.3"
+  },
+  "scripts": {
+    "api": "typedoc --entryPoints ../../frontend/src --entryPointStrategy expand --tsconfig ../../frontend/tsconfig.json --excludePrivate false --excludeProtected false --out ../../build/site/frontend --json ../../build/docs/frontend.json --name SmartSCA --readme none"
+  }
+}

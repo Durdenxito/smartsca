@@ -1,0 +1,18 @@
+spring:
+  application:
+    name: smartsca
+  datasource:
+    url: ${SMARTSCA_DB_URL:jdbc:postgresql://localhost:5432/smartsca}
+    username: ${SMARTSCA_DB_USER:smartsca}
+    password: ${SMARTSCA_DB_PASSWORD:${POSTGRES_PASSWORD:}}
+    hikari:
+      connection-timeout: 5000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+
+smartsca:
+  fixtures-root: ${SMARTSCA_FIXTURES:../fixtures}
+  enrichment:
+    enabled: ${SMARTSCA_ENRICHMENT_ENABLED:true}

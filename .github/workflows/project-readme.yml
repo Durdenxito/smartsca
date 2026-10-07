@@ -1,0 +1,123 @@
+name: Documentación del proyecto en README
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'infra/**'
+      - 'fixtures/**'
+      - 'scripts/docs/**'
+      - '.github/workflows/project-readme.yml'
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'infra/**'
+      - 'fixtures/**'
+      - 'scripts/docs/**'
+      - '.github/workflows/project-readme.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: readme-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  generate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: smartsca_docs
+          POSTGRES_USER: smartsca_docs
+          POSTGRES_PASSWORD: docs-ci-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U smartsca_docs -d smartsca_docs"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGDATABASE: smartsca_docs
+      PGUSER: smartsca_docs
+      PGPASSWORD: docs-ci-only
+      FLYWAY_USER: smartsca_docs
+      FLYWAY_PASSWORD: docs-ci-only
+      SMARTSCA_TEST_DB_URL: jdbc:postgresql://localhost:5432/smartsca_docs
+      SMARTSCA_DB_URL: jdbc:postgresql://localhost:5432/smartsca_docs
+      SMARTSCA_DB_USER: smartsca_docs
+      SMARTSCA_DB_PASSWORD: docs-ci-only
+      SMARTSCA_TEST_DOCKER: 'true'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Construir entorno Maven aislado
+        run: docker build -t smartsca-maven:3.9.9-jdk21-plugin3.11.0 infra/analysis
+      - name: Validar registro, worker, diez fixtures y persistencia
+        working-directory: backend
+        run: ./mvnw -B -ntp verify
+      - name: Validar fixture Maven
+        working-directory: backend
+        run: ./mvnw -B -ntp -f ../fixtures/maven-basic/pom.xml verify
+      - name: Validar interfaz con API y PostgreSQL reales
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: registration-test-results
+          path: |
+            frontend/test-results/
+            backend/target/surefire-reports/
+          if-no-files-found: ignore
+      - name: Validar generador
+        run: python3 -m unittest discover -s scripts/docs -p 'test_*.py'
+      - name: Generar diccionario y diagramas desde las fuentes
+        run: |
+          bash scripts/docs/prepare.sh
+          python3 scripts/docs/generate.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: project-readme
+          path: README.md
+
+  publish:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: generate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: project-readme
+          path: .
+      - name: Actualizar solo el README en main
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- README.md
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "docs: regenerate project README"
+          git push origin HEAD:main
