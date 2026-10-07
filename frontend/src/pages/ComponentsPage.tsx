@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { request, errorMessage, type Analysis, type ComponentItem } from '../api/client';
 import HealthDetails from '../components/HealthDetails';
+import AnalysisNotice from '../components/AnalysisNotice';
 
 export default function ComponentsPage({ id }: { id: string }) {
   const [analysis, setAnalysis] = useState<Analysis>();
@@ -39,6 +40,8 @@ export default function ComponentsPage({ id }: { id: string }) {
     {!analysis && !error && <p role="status">Cargando inventario…</p>}
     {analysis && <>
       <p>{analysis.project.name} · Estado: {analysis.status}</p>
+      <AnalysisNotice status={analysis.status} />
+      <p><a href={`#analysis/${id}/summary`}>Consultar resumen y cobertura</a></p>
       <p className="muted">Este inventario refleja la resolución Maven guardada. Consulta la salud y disponibilidad de evidencias por componente; las prioridades y sus limitaciones están en los hallazgos.</p>
       {analysis.vulnerabilitySnapshot && <p><a href={`#analysis/${id}/findings`}>Revisar vulnerabilidades y evidencias</a></p>}
       <div className="filters">

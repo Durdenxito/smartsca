@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { request, errorMessage, type Analysis, type Advisory, type ComponentItem, type Evidence, type Vulnerability, type RiskAssessment } from '../api/client';
 import HealthDetails from '../components/HealthDetails';
+import AnalysisNotice from '../components/AnalysisNotice';
 
 function safeUrl(value: string) {
   try { const url = new URL(value); return ['https:', 'http:'].includes(url.protocol) ? url.href : undefined; }
@@ -116,6 +117,8 @@ export default function FindingsPage({ id, initialPurl }: { id: string; initialP
     {!analysis && !error && <p role="status">Consultando evidencias guardadas…</p>}
     {analysis && snapshot && <>
       <p>{analysis.project.name} · Estado: {analysis.status}</p>
+      <AnalysisNotice status={analysis.status} />
+      <p><a href={`#analysis/${id}/summary`}>Consultar resumen y cobertura</a></p>
       <p className="muted">{risk ? `Prioridad guardada: ${risk.policy.version}. KEV confirmado primero; pendientes antes que evaluados dentro de cada grupo KEV; después puntuación e identidad.`
         : 'Prioridad no evaluada en esta instantánea anterior; no se recalcula al consultar.'} Alcanzabilidad no analizada.</p>
       {risk && <details><summary>Política de prioridad guardada</summary>

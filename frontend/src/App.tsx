@@ -4,6 +4,7 @@ import AnalysisStatusPage from './pages/AnalysisStatusPage';
 import ComponentsPage from './pages/ComponentsPage';
 import GraphPage from './pages/GraphPage';
 import FindingsPage from './pages/FindingsPage';
+import AnalysisSummaryPage from './pages/AnalysisSummaryPage';
 import './styles.css';
 
 export default function App() {
@@ -13,10 +14,11 @@ export default function App() {
     window.addEventListener('hashchange', navigate);
     return () => window.removeEventListener('hashchange', navigate);
   }, []);
-  const route = /^#analysis\/([^/?]+)(?:\/(components|graph|findings))?(?:\?(.*))?$/.exec(hash);
+  const route = /^#analysis\/([^/?]+)(?:\/(components|graph|findings|summary))?(?:\?(.*))?$/.exec(hash);
   return <>
     <header><a href="#" aria-label="SmartSCA, inicio">SmartSCA</a><span>Java / Maven</span></header>
-    <main>{route ? route[2] === 'findings' ? <FindingsPage key={`${route[1]}/${route[3] ?? ''}`} id={route[1]} initialPurl={new URLSearchParams(route[3]).get('component') ?? ''} />
+    <main>{route ? route[2] === 'summary' ? <AnalysisSummaryPage key={route[1]} id={route[1]} />
+      : route[2] === 'findings' ? <FindingsPage key={`${route[1]}/${route[3] ?? ''}`} id={route[1]} initialPurl={new URLSearchParams(route[3]).get('component') ?? ''} />
       : route[2] === 'graph' ? <GraphPage key={`${route[1]}/${route[3] ?? ''}`} id={route[1]} initialPurl={new URLSearchParams(route[3]).get('component') ?? ''} />
       : route[2] === 'components' ? <ComponentsPage key={route[1]} id={route[1]} /> : <AnalysisStatusPage key={route[1]} id={route[1]} /> : <NewAnalysisPage />}</main>
   </>;

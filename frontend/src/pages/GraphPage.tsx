@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { request, errorMessage, type Analysis, type Component, type Neighborhood, type Routes } from '../api/client';
+import AnalysisNotice from '../components/AnalysisNotice';
 
 /** A bounded neighborhood and textual routes from the saved snapshot; no tool or external API runs here. */
 export default function GraphPage({ id, initialPurl = '' }: { id: string; initialPurl?: string }) {
@@ -97,7 +98,9 @@ export default function GraphPage({ id, initialPurl = '' }: { id: string; initia
     {!analysis && !error && <p role="status">Cargando grafo…</p>}
     {analysis && snapshot && <>
       <p>{analysis.project.name} · Estado: {analysis.status}</p>
-      <p className="muted">Consulta la salud en el inventario y el estado de las evidencias de vulnerabilidad; prioridad aún no evaluada. La profundidad y la transitividad no indican menor riesgo.</p>
+      <AnalysisNotice status={analysis.status} />
+      <p><a href={`#analysis/${id}/summary`}>Consultar resumen y cobertura</a></p>
+      <p className="muted">Consulta la salud en el inventario y la prioridad guardada en los hallazgos. La profundidad y la transitividad no indican menor riesgo.</p>
       <p>La instantánea conserva todos los scopes Maven. Los scopes configurados en el análisis filtran el inventario.</p>
       <div className="filters">
         <label>Módulo del grafo<select value={module} onChange={event => { setModule(event.target.value); pick(''); }}>
