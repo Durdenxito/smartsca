@@ -12,6 +12,15 @@ import tools.jackson.databind.json.JsonMapper;
 
 /** Fixed provider endpoints, bounded bodies/deadlines, one transient retry and a small TTL cache. */
 public final class ExternalJsonClient {
+    /** Keeps HTTP absence distinguishable from transport or invalid-response failures. */
+    public static final class HttpStatusException extends IllegalArgumentException {
+        private final int statusCode;
+        public HttpStatusException(int statusCode) {
+            super("La fuente respondió HTTP " + statusCode + ".");
+            this.statusCode = statusCode;
+        }
+        public int statusCode() { return statusCode; }
+    }
     public record Response(JsonNode json, Instant collectedAt) {}
     public record Document(byte[] bytes, Instant collectedAt) {
         public Document { bytes = bytes.clone(); }
@@ -58,7 +67,7 @@ public final class ExternalJsonClient {
                 var response = future.get(timeout.toNanos(), TimeUnit.NANOSECONDS);
                 int code = response.statusCode();
                 if ((code == 429 || code >= 500) && attempt == 0) { Thread.sleep(200); continue; }
-                if (code != 200) throw new IllegalArgumentException("La fuente respondió HTTP " + code + ".");
+                if (code != 200) throw new HttpStatusException(code);
                 var result = new Document(response.body(), Instant.now());
                 // Up to 16 responses of 8 MiB; evict oldest entries, never reuse errors or expired data.
                 if (cache.size() >= 16) cache.remove(cache.keySet().iterator().next());

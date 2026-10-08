@@ -16,7 +16,7 @@ import javax.xml.parsers.DocumentBuilderFactory;
 import org.w3c.dom.Element;
 import tools.jackson.databind.JsonNode;
 
-/** Exact-version published POM SCM, checked against deps.dev; no guessed mirrors or arbitrary fetches. */
+/** Published version/parent POM SCM, checked against deps.dev projects; no guessed mirrors or arbitrary fetches. */
 public final class ScorecardHealthAdapter implements HealthSource {
     private final ExternalJsonClient http;
     private final URI metadata, central;
@@ -60,70 +60,69 @@ public final class ScorecardHealthAdapter implements HealthSource {
                 return HealthAssessment.unavailable(component.purl(), source, EvidenceStatus.NO_DISPONIBLE, "Coordenadas Maven no admitidas para consultar metadatos.");
             URI versionUri = metadata.resolve("systems/maven/packages/" + encode(component.name()) + "/versions/" + encode(component.version()));
             source = versionUri.toString();
-            var version = http.request(versionUri, null, deadline);
-            observed = version.collectedAt();
-            evidence.add(Evidence.available(source, observed, null, version.json().toString()));
-            var key = version.json().path("versionKey");
-            if (!key.path("system").asString().equals("MAVEN") || !key.path("name").asString().equals(component.name())
-                || !key.path("version").asString().equals(component.version())) throw new IllegalArgumentException("Metadatos de otra identidad o versión.");
+            boolean versionAvailable = true;
             Set<String> candidates = new TreeSet<>();
-            var related = version.json().path("relatedProjects");
-            if (!related.isMissingNode() && !related.isArray()) throw new IllegalArgumentException("Relaciones de repositorio inválidas.");
-            for (var project : related) if (project.path("relationType").asString().equals("SOURCE_REPO")) {
-                String id = repository(project.path("projectKey").path("id").asString());
-                if (id == null) return unavailable(component.purl(), source, observed, EvidenceStatus.NO_DISPONIBLE, evidence, "Repositorio de origen con formato no admitido; no se adivina una alternativa.");
-                candidates.add(id);
+            try {
+                var version = http.request(versionUri, null, deadline);
+                observed = version.collectedAt();
+                evidence.add(Evidence.available(source, observed, null, version.json().toString()));
+                var key = version.json().path("versionKey");
+                if (!key.path("system").asString().equals("MAVEN") || !key.path("name").asString().equals(component.name())
+                    || !key.path("version").asString().equals(component.version())) throw new IllegalArgumentException("Metadatos de otra identidad o versión.");
+                var related = version.json().path("relatedProjects");
+                if (!related.isMissingNode() && !related.isArray()) throw new IllegalArgumentException("Relaciones de repositorio inválidas.");
+                for (var project : related) if (project.path("relationType").asString().equals("SOURCE_REPO")) {
+                    String id = repository(project.path("projectKey").path("id").asString());
+                    if (id == null) return unavailable(component.purl(), source, observed, EvidenceStatus.NO_DISPONIBLE, evidence, "Repositorio de origen con formato no admitido; no se adivina una alternativa.");
+                    candidates.add(id);
+                }
+            } catch (ExternalJsonClient.HttpStatusException error) {
+                if (error.statusCode() != 404) throw error;
+                versionAvailable = false;
+                evidence.add(observation(source, observed, null, EvidenceStatus.NO_DISPONIBLE,
+                    "deps.dev no tiene registrada esta versión (HTTP 404); se consulta su POM publicado."));
             }
             if (candidates.size() > 1) return unavailable(component.purl(), source, observed, EvidenceStatus.NO_DISPONIBLE, evidence, "La versión tiene varios repositorios de origen; asociación ambigua.");
             URI pomUri = central.resolve(name[0].replace('.', '/') + "/" + name[1] + "/" + component.version() + "/" + name[1] + "-" + component.version() + ".pom");
             source = pomUri.toString();
             observed = Instant.now();
-            var document = http.document(pomUri, null, deadline);
-            observed = document.collectedAt();
-            byte[] bytes = document.bytes();
-            // Reversible and JSONB-safe even when XML cannot be parsed (e.g. UTF-16 with NUL bytes).
-            evidence.add(Evidence.available(source, observed, null, "BASE64:" + Base64.getEncoder().encodeToString(bytes)));
-            if (bytes.length > 1_048_576) throw new IllegalArgumentException("El POM publicado supera 1 MiB.");
-            var factory = DocumentBuilderFactory.newInstance();
-            factory.setNamespaceAware(true);
-            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
-            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
-            factory.setXIncludeAware(false); factory.setExpandEntityReferences(false);
-            var builder = factory.newDocumentBuilder();
-            builder.setErrorHandler(new org.xml.sax.helpers.DefaultHandler() {
-                @Override public void error(org.xml.sax.SAXParseException error) throws org.xml.sax.SAXException { throw error; }
-                @Override public void fatalError(org.xml.sax.SAXParseException error) throws org.xml.sax.SAXException { throw error; }
-            });
-            var parsed = builder.parse(new ByteArrayInputStream(bytes));
-            String encoding = parsed.getXmlEncoding() == null ? parsed.getInputEncoding() : parsed.getXmlEncoding();
-            String original = java.nio.charset.Charset.forName(encoding == null ? "UTF-8" : encoding).newDecoder()
-                .decode(java.nio.ByteBuffer.wrap(bytes)).toString();
-            if (original.indexOf('\0') < 0) evidence.set(evidence.size() - 1, Evidence.available(source, observed, null, original));
-            Element pom = parsed.getDocumentElement();
-            if (!"project".equals(pom.getLocalName()) || !"http://maven.apache.org/POM/4.0.0".equals(pom.getNamespaceURI()))
-                throw new IllegalArgumentException("POM publicado inválido.");
-            Element parent = child(pom, "parent");
-            String group = text(pom, "groupId"), release = text(pom, "version");
-            if (group.isEmpty()) group = text(parent, "groupId");
-            if (release.isEmpty()) release = text(parent, "version");
-            if (!group.equals(name[0]) || !text(pom, "artifactId").equals(name[1]) || !release.equals(component.version()))
-                throw new IllegalArgumentException("El POM publicado no coincide con la versión instalada.");
+            var poms = new ArrayList<Element>();
+            publishedPoms(name[0], name[1], component.version(), deadline, evidence, poms, new HashSet<>());
+            var properties = new HashMap<String, String>();
+            var fields = new HashMap<String, String>();
+            var profileProperties = new HashSet<String>();
+            for (int index = poms.size() - 1; index >= 0; index--) {
+                Element pom = poms.get(index);
+                properties.putAll(properties(pom));
+                Element profiles = child(pom, "profiles");
+                if (profiles != null)
+                    for (var entry = profiles.getFirstChild(); entry != null; entry = entry.getNextSibling())
+                        if (entry instanceof Element profile) profileProperties.addAll(properties(profile).keySet());
+                Element declaration = child(pom, "scm");
+                for (String field : List.of("url", "connection", "developerConnection")) {
+                    String value = text(declaration, field);
+                    if (!value.isEmpty()) fields.put(field, value);
+                }
+            }
+            properties.put("project.groupId", name[0]); properties.put("pom.groupId", name[0]);
+            properties.put("project.artifactId", name[1]); properties.put("pom.artifactId", name[1]);
+            properties.put("project.version", component.version()); properties.put("pom.version", component.version());
+            Element parent = child(poms.getFirst(), "parent");
+            for (String field : List.of("groupId", "artifactId", "version")) {
+                properties.put("project.parent." + field, text(parent, field));
+                properties.put("pom.parent." + field, text(parent, field));
+            }
             Set<String> scm = new TreeSet<>();
-            Element declaration = child(pom, "scm");
-            // ponytail: direct literal SCM only; effective parent/property resolution when its coverage is needed.
-            for (String field : List.of("url", "connection", "developerConnection")) {
-                String value = text(declaration, field);
-                if (value.isEmpty()) continue;
-                String id = repository(value);
-                if (id == null) return unavailable(component.purl(), source, observed, EvidenceStatus.NO_DISPONIBLE, evidence,
-                    "SCM sin resolver o en un host/formato no admitido. No se asigna salud de un repositorio supuesto.");
+            // Repository identity only: inherited checkout subpaths do not change an accepted owner/repository base.
+            for (String value : fields.values()) {
+                String id = repository(interpolate(value, properties, profileProperties));
+                if (id == null) return unavailable(component.purl(), pomUri.toString(), observed, EvidenceStatus.NO_DISPONIBLE, evidence,
+                    "SCM sin resolver, dependiente de perfiles o en un host/formato no admitido. No se asigna salud de un repositorio supuesto.");
                 scm.add(id);
             }
             if (scm.size() != 1 || (!candidates.isEmpty() && !candidates.equals(scm)))
                 return unavailable(component.purl(), source, observed, EvidenceStatus.NO_DISPONIBLE, evidence,
-                    "No existe un SCM literal único concordante con los metadatos de la versión; puede faltar, ser heredado o ser contradictorio.");
+                    "No existe un SCM único concordante con los metadatos disponibles; puede faltar o ser contradictorio.");
             String id = scm.iterator().next();
             URI projectUri = metadata.resolve("projects/" + encode(id));
             source = projectUri.toString();
@@ -134,7 +133,8 @@ public final class ScorecardHealthAdapter implements HealthSource {
             if (!id.equals(repository(project.json().path("projectKey").path("id").asString())))
                 throw new IllegalArgumentException("La respuesta pertenece a otro repositorio; asociación no comprobada.");
             association = Evidence.available(pomUri + " / " + projectUri, project.collectedAt(), null,
-                new RepositoryAssociation(id, "SCM_POM_Y_PROYECTO_CONTRASTADOS"));
+                new RepositoryAssociation(id, (versionAvailable ? "SCM_POM_Y_PROYECTO_CONTRASTADOS" : "SCM_POM_Y_PROYECTO_SIN_VERSION_DEPS_DEV")
+                        + (poms.size() > 1 ? "_PADRES_V1" : "")));
             var report = project.json().path("scorecard");
             if (report.isMissingNode() || report.isNull()) return absentReport(component.purl(), association, source,
                 project.collectedAt(), null, EvidenceStatus.NO_DISPONIBLE, evidence, "El repositorio no tiene un resultado Scorecard publicado en esta fuente.");
@@ -173,10 +173,114 @@ public final class ScorecardHealthAdapter implements HealthSource {
                 new ScorecardReport(id, repoCommit, toolVersion, toolCommit, date.plus(Duration.ofDays(90)).isBefore(project.collectedAt()),
                     "scorecard-age-v1-90d")), indicators, evidence);
         } catch (Exception error) {
+            if (source.endsWith(".pom") && !evidence.isEmpty()) {
+                source = evidence.getLast().source(); observed = evidence.getLast().collectedAt();
+            }
             String reason = error instanceof IllegalArgumentException ? error.getMessage() : "No se pudo interpretar la evidencia publicada de salud.";
-            return association == null ? unavailable(component.purl(), source, observed, EvidenceStatus.ERROR, evidence, reason)
-                : absentReport(component.purl(), association, source, observed, null, EvidenceStatus.ERROR, evidence, reason);
+            var status = error instanceof ExternalJsonClient.HttpStatusException httpError && httpError.statusCode() == 404
+                ? EvidenceStatus.NO_DISPONIBLE : EvidenceStatus.ERROR;
+            return association == null ? unavailable(component.purl(), source, observed, status, evidence, reason)
+                : absentReport(component.purl(), association, source, observed, null, status, evidence, reason);
         }
+    }
+    private void publishedPoms(String groupId, String artifactId, String version, long deadline,
+            List<Evidence<String>> evidence, List<Element> poms, Set<String> seen) throws Exception {
+        if (!coordinate(groupId) || !groupId.matches("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*")
+            || !coordinate(artifactId) || !artifactId.matches("[A-Za-z0-9].*") || !coordinate(version) || !version.matches("[A-Za-z0-9].*"))
+            throw new IllegalArgumentException("Coordenadas de POM padre no admitidas; solo valores literales de Maven Central.");
+        if (poms.size() >= 16 || !seen.add(groupId + ":" + artifactId + ":" + version))
+            throw new IllegalArgumentException("Cadena de padres Maven cíclica o superior a 16 POM.");
+        URI uri = central.resolve(groupId.replace('.', '/') + "/" + artifactId + "/" + version + "/" + artifactId + "-" + version + ".pom");
+        ExternalJsonClient.Document document;
+        try { document = http.document(uri, null, deadline); }
+        catch (RuntimeException error) {
+            evidence.add(observation(uri.toString(), Instant.now(), null,
+                error instanceof ExternalJsonClient.HttpStatusException status && status.statusCode() == 404
+                    ? EvidenceStatus.NO_DISPONIBLE : EvidenceStatus.ERROR, error.getMessage()));
+            throw error;
+        }
+        var observed = document.collectedAt();
+        byte[] bytes = document.bytes();
+        // Reversible and JSONB-safe even when XML cannot be parsed (e.g. UTF-16 with NUL bytes).
+        evidence.add(Evidence.available(uri.toString(), observed, null, "BASE64:" + Base64.getEncoder().encodeToString(bytes)));
+        if (bytes.length > 1_048_576) throw new IllegalArgumentException("El POM publicado supera 1 MiB.");
+        var factory = DocumentBuilderFactory.newInstance();
+        factory.setNamespaceAware(true);
+        factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+        factory.setXIncludeAware(false); factory.setExpandEntityReferences(false);
+        var builder = factory.newDocumentBuilder();
+        builder.setErrorHandler(new org.xml.sax.helpers.DefaultHandler() {
+            @Override public void error(org.xml.sax.SAXParseException error) throws org.xml.sax.SAXException { throw error; }
+            @Override public void fatalError(org.xml.sax.SAXParseException error) throws org.xml.sax.SAXException { throw error; }
+        });
+        var parsed = builder.parse(new ByteArrayInputStream(bytes));
+        String encoding = parsed.getXmlEncoding() == null ? parsed.getInputEncoding() : parsed.getXmlEncoding();
+        String original = java.nio.charset.Charset.forName(encoding == null ? "UTF-8" : encoding).newDecoder()
+            .decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+        if (original.indexOf('\0') < 0) evidence.set(evidence.size() - 1, Evidence.available(uri.toString(), observed, null, original));
+        Element pom = parsed.getDocumentElement();
+        if (!"project".equals(pom.getLocalName()) || !"http://maven.apache.org/POM/4.0.0".equals(pom.getNamespaceURI()))
+            throw new IllegalArgumentException("POM publicado inválido.");
+        Element parent = child(pom, "parent");
+        String group = text(pom, "groupId"), release = text(pom, "version");
+        if (group.isEmpty()) group = text(parent, "groupId");
+        if (release.isEmpty()) release = text(parent, "version");
+        if (!group.equals(groupId) || !text(pom, "artifactId").equals(artifactId) || !release.equals(version))
+            throw new IllegalArgumentException("El POM publicado no coincide con la versión instalada.");
+        poms.add(pom);
+        Element declaration = child(pom, "scm");
+        var ownProperties = properties(pom);
+        for (String prefix : List.of("project.", "pom.")) {
+            ownProperties.put(prefix + "groupId", groupId);
+            ownProperties.put(prefix + "artifactId", artifactId);
+            ownProperties.put(prefix + "version", version);
+            for (String field : List.of("groupId", "artifactId", "version"))
+                ownProperties.put(prefix + "parent." + field, text(parent, field));
+        }
+        boolean complete = true;
+        for (String field : List.of("url", "connection", "developerConnection")) {
+            String value = interpolate(text(declaration, field), ownProperties, Set.of());
+            if (value.isEmpty() || value.contains("${")) complete = false;
+        }
+        if (!complete && parent != null)
+            publishedPoms(text(parent, "groupId"), text(parent, "artifactId"), text(parent, "version"), deadline, evidence, poms, seen);
+    }
+    private static Map<String, String> properties(Element pom) {
+        var result = new HashMap<String, String>();
+        Element values = child(pom, "properties");
+        if (values != null) for (var entry = values.getFirstChild(); entry != null; entry = entry.getNextSibling())
+            if (entry instanceof Element property && Objects.equals(pom.getNamespaceURI(), property.getNamespaceURI())) {
+                if (result.size() >= 256 || property.getTextContent().length() > 8192)
+                    throw new IllegalArgumentException("Propiedades Maven superiores al límite de salud.");
+                result.put(property.getLocalName(), property.getTextContent().strip());
+            }
+        return result;
+    }
+    private static String interpolate(String value, Map<String, String> properties, Set<String> profileProperties) {
+        if (value.length() > 8192) return "${limite}";
+        var pattern = java.util.regex.Pattern.compile("\\$\\{([^{}]+)}");
+        for (int round = 0; round < 16 && value.contains("${"); round++) {
+            var matcher = pattern.matcher(value);
+            var next = new StringBuilder();
+            while (matcher.find()) {
+                String key = matcher.group(1), replacement = properties.get(key);
+                // Model/environment variables must never be impersonated by a POM property.
+                if (key.matches("(?:project|pom|env|settings|java|os|user)\\..*") || key.equals("basedir"))
+                    if (!key.matches("(?:project|pom)\\.(?:groupId|artifactId|version|parent\\.(?:groupId|artifactId|version))")) return value;
+                if (profileProperties.contains(key) || replacement == null) return value;
+                matcher.appendReplacement(next, java.util.regex.Matcher.quoteReplacement(replacement));
+                if (next.length() > 8192) return "${limite}";
+            }
+            matcher.appendTail(next);
+            if (next.length() > 8192) return "${limite}";
+            String expanded = next.toString();
+            if (expanded.equals(value)) break;
+            value = expanded;
+        }
+        return value;
     }
     private static HealthAssessment absentReport(String purl, Evidence<RepositoryAssociation> association, String source, Instant time, String date, EvidenceStatus status, List<Evidence<String>> evidence, String reason) {
         Map<String, Evidence<Indicator>> checks = new LinkedHashMap<>();

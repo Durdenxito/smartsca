@@ -27,11 +27,15 @@ class HealthEnrichmentTests {
         String pomEncoding = "UTF-8";
         boolean nulPom;
         byte[] lastPom;
+        int versionStatus = 200;
+        final Map<String, String> poms = new HashMap<>();
+        final Map<String, Integer> statuses = new HashMap<>();
         Providers() throws Exception {
             server.createContext("/", exchange -> {
                 calls.incrementAndGet();
                 String path = exchange.getRequestURI().getPath(), body; int status = 200;
                 if (path.startsWith("/systems/maven/")) {
+                    status = versionStatus;
                     String name = path.substring(path.indexOf("/packages/") + 10, path.indexOf("/versions/"));
                     String version = path.substring(path.indexOf("/versions/") + 10);
                     var related = new ArrayList<Object>();
@@ -64,6 +68,8 @@ class HealthEnrichmentTests {
                     body = json.writeValueAsString(project);
                     if (failProject) status = 503;
                 } else { body = "{}"; status = 404; }
+                body = poms.getOrDefault(path, body);
+                status = statuses.getOrDefault(path, status);
                 byte[] bytes = body.getBytes(path.endsWith(".pom") ? java.nio.charset.Charset.forName(pomEncoding) : StandardCharsets.UTF_8);
                 if (path.endsWith(".pom")) lastPom = bytes.clone();
                 exchange.sendResponseHeaders(status, bytes.length); exchange.getResponseBody().write(bytes); exchange.close();
@@ -184,5 +190,115 @@ class HealthEnrichmentTests {
         assertEquals(4, result.indicators().size());
         assertTrue(result.indicators().values().stream().anyMatch(check -> check.status() == EvidenceStatus.DISPONIBLE));
         assertTrue(result.associationEvidence().stream().allMatch(value -> value.source().startsWith("https://")));
+    }
+    static String pom(String artifact, String extra) {
+        return "<project xmlns='http://maven.apache.org/POM/4.0.0'><modelVersion>4.0.0</modelVersion><groupId>demo</groupId><artifactId>"
+            + artifact + "</artifactId><version>1</version>" + extra + "</project>";
+    }
+    static final String PARENT = "<parent><groupId>demo</groupId><artifactId>parent</artifactId><version>1</version><relativePath>https://invalid.example/pom.xml</relativePath></parent>";
+    static final String SCM_PROPERTIES = "<scm><url>https://github.com/${owner}/${repo}</url><connection>scm:git:https://github.com/${owner}/${repo}.git</connection></scm>";
+    @Test void resolvesParentScmWithChildPropertiesAndPersistsAllFetchedEvidence() throws Exception {
+        try (var reference = new Providers()) {
+            reference.poms.put("/demo/library/1/library-1.pom", pom("library", PARENT + "<properties><owner>demo</owner><repo>${project.artifactId}</repo></properties>"));
+            reference.poms.put("/demo/parent/1/parent-1.pom", pom("parent", SCM_PROPERTIES));
+            var result = reference.adapter().assess(List.of(A)).get(A.purl());
+            assertEquals(EvidenceStatus.DISPONIBLE, result.repository().status(), result.repository().diagnostic());
+            assertEquals("github.com/demo/library", result.repository().value().id());
+            assertTrue(result.repository().value().method().endsWith("_PADRES_V1"));
+            assertEquals(4, result.associationEvidence().size());
+            assertTrue(result.associationEvidence().get(2).source().endsWith("parent-1.pom"));
+            assertEquals(4, reference.calls.get()); // Only fixed endpoints; ignores relativePath and arbitrary repositories.
+            assertEquals(result, reference.json.readValue(reference.json.writeValueAsString(result), HealthAssessment.class));
+        }
+    }
+    @Test void fallsBackOnlyOnVersion404AndKeepsItsAbsenceWithoutInventingHealth() throws Exception {
+        try (var reference = new Providers()) {
+            reference.versionStatus = 404;
+            var result = reference.adapter().assess(List.of(A)).get(A.purl());
+            assertEquals(EvidenceStatus.DISPONIBLE, result.scorecard().status());
+            assertTrue(result.repository().value().method().contains("SIN_VERSION_DEPS_DEV"));
+            assertEquals(EvidenceStatus.NO_DISPONIBLE, result.associationEvidence().getFirst().status());
+            assertTrue(result.associationEvidence().getFirst().diagnostic().contains("404"));
+            reference.statuses.put("/demo/library/1/library-1.pom", 404);
+            result = reference.adapter().assess(List.of(A)).get(A.purl());
+            assertEquals(EvidenceStatus.NO_DISPONIBLE, result.repository().status());
+            assertNull(result.scorecard().value());
+            assertTrue(result.indicators().values().stream().allMatch(value -> value.value() == null));
+            assertTrue(result.repository().source().endsWith("library-1.pom"));
+            reference.statuses.clear(); reference.versionStatus = 403;
+            int before = reference.calls.get();
+            result = reference.adapter().assess(List.of(A)).get(A.purl());
+            assertEquals(EvidenceStatus.ERROR, result.repository().status());
+            assertEquals(before + 1, reference.calls.get());
+            reference.versionStatus = 404; reference.badReport = true;
+            result = reference.adapter().assess(List.of(A)).get(A.purl());
+            assertEquals(EvidenceStatus.ERROR, result.scorecard().status());
+            assertNull(result.scorecard().value());
+        }
+    }
+    @Test void rejectsCyclicDeepWrongIdentityAndHostileParents() throws Exception {
+        try (var reference = new Providers()) {
+            reference.poms.put("/demo/library/1/library-1.pom", pom("library", PARENT));
+            reference.poms.put("/demo/parent/1/parent-1.pom", pom("other", SCM_PROPERTIES));
+            var result = reference.adapter().assess(List.of(A)).get(A.purl());
+            assertEquals(EvidenceStatus.ERROR, result.repository().status());
+            assertTrue(result.repository().source().endsWith("parent-1.pom"));
+            reference.poms.put("/demo/parent/1/parent-1.pom", pom("parent", "<parent><groupId>demo</groupId><artifactId>library</artifactId><version>1</version></parent>"));
+            assertEquals(EvidenceStatus.ERROR, reference.adapter().assess(List.of(A)).get(A.purl()).repository().status());
+            reference.poms.put("/demo/parent/1/parent-1.pom", "<!DOCTYPE project [<!ENTITY x SYSTEM 'http://127.0.0.1/secret'>]>" + pom("parent", SCM_PROPERTIES));
+            assertEquals(EvidenceStatus.ERROR, reference.adapter().assess(List.of(A)).get(A.purl()).repository().status());
+            reference.poms.put("/demo/library/1/library-1.pom", pom("library", "<parent><groupId>../escape</groupId><artifactId>parent</artifactId><version>1</version></parent>"));
+            int before = reference.calls.get();
+            assertEquals(EvidenceStatus.ERROR, reference.adapter().assess(List.of(A)).get(A.purl()).repository().status());
+            assertEquals(before + 2, reference.calls.get());
+            reference.poms.put("/demo/library/1/library-1.pom", pom("library", PARENT.replace("<artifactId>parent</artifactId>", "<artifactId>p0</artifactId>")));
+            for (int index = 0; index < 17; index++) reference.poms.put("/demo/p" + index + "/1/p" + index + "-1.pom",
+                pom("p" + index, "<parent><groupId>demo</groupId><artifactId>p" + (index + 1) + "</artifactId><version>1</version></parent>"));
+            before = reference.calls.get();
+            assertEquals(EvidenceStatus.ERROR, reference.adapter().assess(List.of(A)).get(A.purl()).repository().status());
+            assertEquals(before + 17, reference.calls.get()); // Metadata + at most 16 POM documents.
+        }
+    }
+    @Test void leavesUnknownCyclicProfileDependentAndContradictoryScmUnevaluated() throws Exception {
+        try (var reference = new Providers()) {
+            for (String properties : List.of("", "<properties><owner>${repo}</owner><repo>${owner}</repo></properties>",
+                "<properties><owner>demo</owner><repo>library</repo></properties><profiles><profile><id>other</id><properties><repo>different</repo></properties></profile></profiles>",
+                "<properties><owner>other</owner><repo>repository</repo></properties>")) {
+                reference.poms.put("/demo/library/1/library-1.pom", pom("library", properties + SCM_PROPERTIES));
+                var result = reference.adapter().assess(List.of(A)).get(A.purl());
+                assertEquals(EvidenceStatus.NO_DISPONIBLE, result.repository().status());
+                assertNull(result.scorecard().value());
+            }
+        }
+    }
+    @Test void rejectsImpersonatedModelAndEnvironmentPropertiesEvenThroughAliases() throws Exception {
+        try (var reference = new Providers()) {
+            reference.versionStatus = 404;
+            for (String key : List.of("project.url", "pom.url", "project.scm.url", "env.REPOSITORY", "settings.repository", "java.home", "os.name", "user.home", "basedir")) {
+                for (boolean alias : List.of(false, true)) {
+                    String properties = "<properties><" + key + ">https://github.com/demo/library</" + key + ">"
+                        + (alias ? "<repository>${" + key + "}</repository>" : "") + "</properties>";
+                    reference.poms.put("/demo/library/1/library-1.pom", pom("library",
+                        "<url>https://github.com/other/source</url>" + properties
+                        + "<scm><url>${" + (alias ? "repository" : key) + "}</url></scm>"));
+                    int before = reference.calls.get();
+                    var result = reference.adapter().assess(List.of(A)).get(A.purl());
+                    assertEquals(EvidenceStatus.NO_DISPONIBLE, result.repository().status(), key);
+                    assertNull(result.scorecard().value());
+                    assertTrue(result.indicators().values().stream().allMatch(value -> value.value() == null));
+                    assertEquals(before + 2, reference.calls.get()); // Never queries the substituted repository.
+                }
+            }
+        }
+    }
+    @Test @EnabledIfEnvironmentVariable(named = "SMARTSCA_TEST_EXTERNAL", matches = "true")
+    void readsPublishedGsonInheritedScmAndScorecardFromRealPublicSources() {
+        var component = new Component("pkg:maven/com.google.code.gson/gson@2.11.0", "maven", "com.google.code.gson:gson", "2.11.0", Map.of());
+        var result = new ScorecardHealthAdapter(new ExternalJsonClient(true)).assess(List.of(component)).get(component.purl());
+        assertEquals(EvidenceStatus.DISPONIBLE, result.repository().status(), result.repository().diagnostic());
+        assertEquals("github.com/google/gson", result.repository().value().id());
+        assertEquals(EvidenceStatus.DISPONIBLE, result.scorecard().status(), result.scorecard().diagnostic());
+        assertTrue(result.associationEvidence().stream().anyMatch(value -> value.source().endsWith("gson-parent-2.11.0.pom")));
+        assertTrue(result.indicators().values().stream().anyMatch(value -> value.status() == EvidenceStatus.DISPONIBLE));
     }
 }
