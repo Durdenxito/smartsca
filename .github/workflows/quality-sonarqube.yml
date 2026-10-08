@@ -1,0 +1,64 @@
+name: Calidad sonarqube
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "scripts/quality/**"
+      - ".github/workflows/quality-sonarqube.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: quality-sonarqube-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Comprobar generación y comparación de reportes
+        run: python3 -m unittest discover -s scripts/quality -p 'test_*.py'
+      - name: Recuperar solo una línea base anterior de main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/quality/baseline.py sonarqube --output quality-output
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Analizar y generar reporte
+        env:
+          SONAR_TOKEN: ${{ github.event_name != 'pull_request' && secrets.SONAR_TOKEN || '' }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+        run: python3 scripts/quality/sonar.py --output quality-output
+      - name: Conservar diagnóstico si no se pudo ejecutar el analizador
+        if: always()
+        run: python3 scripts/quality/report.py sonarqube --output quality-output
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: quality-sonarqube
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            quality-output/report.json
+            quality-output/report.md
+            quality-output/raw-*.json
+            quality-output/rules.yml
+            quality-output/scan*.log
