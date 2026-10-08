@@ -19,13 +19,17 @@ import tools.jackson.databind.JsonNode;
 /** Published version/parent POM SCM, checked against deps.dev projects; no guessed mirrors or arbitrary fetches. */
 public final class ScorecardHealthAdapter implements HealthSource {
     private final ExternalJsonClient http;
-    private final URI metadata, central;
+    private final URI metadata, central, gitbox;
     public ScorecardHealthAdapter(ExternalJsonClient http) {
         this(http, URI.create("https://api.deps.dev/v3/"), URI.create("https://repo.maven.apache.org/maven2/"));
     }
     /** Endpoint injection is reserved for HTTP contract tests, never exposed to the User. */
     public ScorecardHealthAdapter(ExternalJsonClient http, URI metadata, URI central) {
-        this.http = http; this.metadata = metadata; this.central = central;
+        this(http, metadata, central, URI.create("https://gitbox.apache.org/repos/asf/"));
+    }
+    /** Fixed GitBox origin in production; injection is reserved for local HTTP contracts. */
+    public ScorecardHealthAdapter(ExternalJsonClient http, URI metadata, URI central, URI gitbox) {
+        this.http = http; this.metadata = metadata; this.central = central; this.gitbox = gitbox;
     }
     @Override public Map<String, HealthAssessment> assess(List<Component> components) {
         Map<String, HealthAssessment> result = new TreeMap<>();
@@ -113,9 +117,16 @@ public final class ScorecardHealthAdapter implements HealthSource {
                 properties.put("pom.parent." + field, text(parent, field));
             }
             Set<String> scm = new TreeSet<>();
+            var mirrors = new HashMap<String, String>();
             // Repository identity only: inherited checkout subpaths do not change an accepted owner/repository base.
             for (String value : fields.values()) {
-                String id = repository(interpolate(value, properties, profileProperties));
+                String expanded = interpolate(value, properties, profileProperties);
+                String id = repository(expanded);
+                String apacheRepository = gitboxRepository(expanded);
+                if (id == null && apacheRepository != null) {
+                    if (!mirrors.containsKey(apacheRepository)) mirrors.put(apacheRepository, gitboxMirror(apacheRepository, deadline, evidence));
+                    id = mirrors.get(apacheRepository);
+                }
                 if (id == null) return unavailable(component.purl(), pomUri.toString(), observed, EvidenceStatus.NO_DISPONIBLE, evidence,
                     "SCM sin resolver, dependiente de perfiles o en un host/formato no admitido. No se asigna salud de un repositorio supuesto.");
                 scm.add(id);
@@ -134,7 +145,7 @@ public final class ScorecardHealthAdapter implements HealthSource {
                 throw new IllegalArgumentException("La respuesta pertenece a otro repositorio; asociación no comprobada.");
             association = Evidence.available(pomUri + " / " + projectUri, project.collectedAt(), null,
                 new RepositoryAssociation(id, (versionAvailable ? "SCM_POM_Y_PROYECTO_CONTRASTADOS" : "SCM_POM_Y_PROYECTO_SIN_VERSION_DEPS_DEV")
-                        + (poms.size() > 1 ? "_PADRES_V1" : "")));
+                        + (poms.size() > 1 ? "_PADRES_V1" : "") + (!mirrors.isEmpty() ? "_GITBOX_REDIRECT_V1" : "")));
             var report = project.json().path("scorecard");
             if (report.isMissingNode() || report.isNull()) return absentReport(component.purl(), association, source,
                 project.collectedAt(), null, EvidenceStatus.NO_DISPONIBLE, evidence, "El repositorio no tiene un resultado Scorecard publicado en esta fuente.");
@@ -182,6 +193,50 @@ public final class ScorecardHealthAdapter implements HealthSource {
             return association == null ? unavailable(component.purl(), source, observed, status, evidence, reason)
                 : absentReport(component.purl(), association, source, observed, null, status, evidence, reason);
         }
+    }
+    private String gitboxMirror(String name, long deadline, List<Evidence<String>> evidence) {
+        URI uri = gitbox.resolve(name + ".git");
+        try {
+            var response = http.document(uri, null, deadline);
+            evidence.add(observation(uri.toString(), response.collectedAt(), null, EvidenceStatus.NO_DISPONIBLE,
+                "GitBox no publicó una redirección a un repositorio GitHub admitido."));
+            return null;
+        } catch (ExternalJsonClient.HttpStatusException error) {
+            Instant time = Instant.now();
+            if (Set.of(301, 302, 303, 307, 308).contains(error.statusCode())) {
+                String target = error.location(), id = repository(target);
+                if (id != null && id.startsWith("github.com/apache/") && target.startsWith("https://")) {
+                    // Record the official redirect; never follow it or fetch arbitrary POM URLs.
+                    evidence.add(Evidence.available(uri.toString(), time, null, "HTTP " + error.statusCode() + "; Location: " + target));
+                    return id;
+                }
+                evidence.add(observation(uri.toString(), time, null, EvidenceStatus.NO_DISPONIBLE,
+                    "Redirección GitBox ausente o fuera de GitHub/apache; no se supone un espejo."));
+                return null;
+            }
+            evidence.add(observation(uri.toString(), time, null,
+                error.statusCode() == 404 ? EvidenceStatus.NO_DISPONIBLE : EvidenceStatus.ERROR, error.getMessage()));
+            throw error;
+        } catch (RuntimeException error) {
+            evidence.add(observation(uri.toString(), Instant.now(), null, EvidenceStatus.ERROR, error.getMessage()));
+            throw error;
+        }
+    }
+    private static String gitboxRepository(String value) {
+        value = value.strip().replaceFirst("^scm:git:", "");
+        try {
+            URI uri = URI.create(value);
+            if (!Set.of("https", "http").contains(uri.getScheme()) || !"gitbox.apache.org".equals(uri.getHost())
+                || uri.getUserInfo() != null || uri.getPort() != -1 || uri.getFragment() != null) return null;
+            String name;
+            if (uri.getRawPath().equals("/repos/asf") && uri.getRawQuery() != null
+                && uri.getRawQuery().matches("p=[A-Za-z0-9_-]+\\.git(?:;a=summary)?"))
+                name = uri.getRawQuery().substring(2).split(";", 2)[0];
+            else if (uri.getRawQuery() == null && uri.getRawPath().matches("/repos/asf/[A-Za-z0-9_-]+\\.git"))
+                name = uri.getRawPath().substring("/repos/asf/".length());
+            else return null;
+            return name.substring(0, name.length() - 4);
+        } catch (RuntimeException error) { return null; }
     }
     private void publishedPoms(String groupId, String artifactId, String version, long deadline,
             List<Evidence<String>> evidence, List<Element> poms, Set<String> seen) throws Exception {

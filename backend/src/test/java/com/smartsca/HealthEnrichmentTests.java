@@ -28,6 +28,9 @@ class HealthEnrichmentTests {
         boolean nulPom;
         byte[] lastPom;
         int versionStatus = 200;
+        int gitboxStatus = 302;
+        String gitboxLocation = "https://github.com/apache/library", repositoryId = "github.com/demo/library";
+        boolean noSource;
         final Map<String, String> poms = new HashMap<>();
         final Map<String, Integer> statuses = new HashMap<>();
         Providers() throws Exception {
@@ -39,7 +42,7 @@ class HealthEnrichmentTests {
                     String name = path.substring(path.indexOf("/packages/") + 10, path.indexOf("/versions/"));
                     String version = path.substring(path.indexOf("/versions/") + 10);
                     var related = new ArrayList<Object>();
-                    related.add(Map.of("projectKey", Map.of("id", "github.com/demo/library"), "relationType", "SOURCE_REPO", "relationProvenance", "UNVERIFIED_METADATA"));
+                    if (!noSource) related.add(Map.of("projectKey", Map.of("id", repositoryId), "relationType", "SOURCE_REPO", "relationProvenance", "UNVERIFIED_METADATA"));
                     related.add(Map.of("projectKey", Map.of("id", "github.com/other/tracker"), "relationType", "ISSUE_TRACKER"));
                     if (ambiguous) related.add(Map.of("projectKey", Map.of("id", "github.com/other/source"), "relationType", "SOURCE_REPO"));
                     body = json.writeValueAsString(Map.of("versionKey", Map.of("system", "MAVEN", "name", badIdentity ? "demo:other" : name, "version", version), "relatedProjects", related));
@@ -52,6 +55,9 @@ class HealthEnrichmentTests {
                     if (maliciousPom) body = body.replace("?><project", "?><!DOCTYPE project [<!ENTITY x SYSTEM 'http://127.0.0.1:" + server.getAddress().getPort() + "/secret'>]><project")
                         .replace("demo/library</url>", "demo/library&x;</url>");
                     if (nulPom) body = body.replace("Résumé", "Résumé\0");
+                } else if (path.equals("/asf/library.git")) {
+                    status = gitboxStatus; body = "GitBox";
+                    if (gitboxLocation != null) exchange.getResponseHeaders().set("Location", gitboxLocation);
                 } else if (path.startsWith("/projects/")) {
                     var checks = new ArrayList<Map<String, Object>>();
                     for (String name : HealthAssessment.CHECKS) {
@@ -61,9 +67,9 @@ class HealthEnrichmentTests {
                     }
                     if (duplicate) checks.add(checks.getFirst());
                     var project = new HashMap<String, Object>();
-                    project.put("projectKey", Map.of("id", "github.com/demo/library"));
+                    project.put("projectKey", Map.of("id", repositoryId));
                     if (!missingReport) project.put("scorecard", Map.of("date", "2026-01-01T00:00:00Z",
-                        "repository", Map.of("name", badReport ? "github.com/other/source" : "github.com/demo/library", "commit", "abc123"),
+                        "repository", Map.of("name", badReport ? "github.com/other/source" : repositoryId, "commit", "abc123"),
                         "scorecard", Map.of("version", "v5", "commit", "tool123"), "checks", checks));
                     body = json.writeValueAsString(project);
                     if (failProject) status = 503;
@@ -78,7 +84,7 @@ class HealthEnrichmentTests {
         }
         ScorecardHealthAdapter adapter() {
             var endpoint = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/");
-            return new ScorecardHealthAdapter(new ExternalJsonClient(true), endpoint, endpoint);
+            return new ScorecardHealthAdapter(new ExternalJsonClient(true), endpoint, endpoint, endpoint.resolve("asf/"));
         }
         @Override public void close() { server.stop(0); }
     }
@@ -290,6 +296,69 @@ class HealthEnrichmentTests {
                 }
             }
         }
+    }
+    @Test void bindsGitboxOnlyThroughItsOfficialRedirectAndPreservesEvidenceWithoutFollowingIt() throws Exception {
+        try (var reference = new Providers()) {
+            reference.repositoryId = "github.com/apache/library";
+            reference.poms.put("/demo/library/1/library-1.pom", pom("library",
+                "<scm><url>https://gitbox.apache.org/repos/asf?p=library.git;a=summary</url>"
+                + "<connection>scm:git:http://gitbox.apache.org/repos/asf/library.git</connection>"
+                + "<developerConnection>scm:git:https://gitbox.apache.org/repos/asf/library.git</developerConnection></scm>"));
+            for (int status : List.of(301, 302, 303, 307, 308)) {
+                reference.gitboxStatus = status;
+                int before = reference.calls.get();
+                var result = reference.adapter().assess(List.of(A)).get(A.purl());
+                assertEquals(EvidenceStatus.DISPONIBLE, result.scorecard().status());
+                assertTrue(result.repository().value().method().endsWith("_GITBOX_REDIRECT_V1"));
+                assertEquals(before + 4, reference.calls.get()); // One GitBox observation; never fetches the Location URL.
+                assertEquals(4, result.associationEvidence().size());
+                assertTrue(result.associationEvidence().get(2).value().contains("HTTP " + status + "; Location: " + reference.gitboxLocation));
+                assertEquals(result, reference.json.readValue(reference.json.writeValueAsString(result), HealthAssessment.class));
+            }
+            reference.noSource = true;
+            assertEquals(EvidenceStatus.DISPONIBLE, reference.adapter().assess(List.of(A)).get(A.purl()).repository().status());
+            for (String target : Arrays.asList(null, "/local", "http://github.com/apache/library", "https://github.com/other/library",
+                    "https://127.0.0.1/private", "https://github.com/apache/other", "https://github.com/apache/library?x=1")) {
+                reference.gitboxLocation = target; reference.noSource = false;
+                int before = reference.calls.get();
+                var result = reference.adapter().assess(List.of(A)).get(A.purl());
+                assertEquals(EvidenceStatus.NO_DISPONIBLE, result.repository().status());
+                assertNull(result.scorecard().value());
+                assertEquals(before + 3, reference.calls.get());
+            }
+            reference.gitboxLocation = "https://github.com/apache/library";
+            for (int status : List.of(200, 404, 403)) {
+                reference.gitboxStatus = status;
+                var result = reference.adapter().assess(List.of(A)).get(A.purl());
+                assertEquals(status == 403 ? EvidenceStatus.ERROR : EvidenceStatus.NO_DISPONIBLE, result.repository().status());
+                assertNull(result.scorecard().value());
+            }
+        }
+    }
+    @Test void rejectsGitboxLookalikesTraversalAndExtraQueryWithoutFetchingThem() throws Exception {
+        try (var reference = new Providers()) {
+            for (String scm : List.of("https://gitbox.apache.org.evil.test/repos/asf/library.git",
+                    "https://gitbox.apache.org:443/repos/asf/library.git", "https://user@gitbox.apache.org/repos/asf/library.git",
+                    "https://gitbox.apache.org/repos/asf/../library.git", "https://gitbox.apache.org/repos/asf/%2Flibrary.git",
+                    "https://gitbox.apache.org/repos/asf?p=library.git;x=other", "https://gitbox.apache.org/repos/asf/library.git#x")) {
+                reference.poms.put("/demo/library/1/library-1.pom", pom("library", "<scm><url>" + scm + "</url></scm>"));
+                int before = reference.calls.get();
+                var result = reference.adapter().assess(List.of(A)).get(A.purl());
+                assertEquals(EvidenceStatus.NO_DISPONIBLE, result.repository().status());
+                assertEquals(before + 2, reference.calls.get());
+            }
+        }
+    }
+    @Test @EnabledIfEnvironmentVariable(named = "SMARTSCA_TEST_EXTERNAL", matches = "true")
+    void readsPublishedApacheGitboxRedirectAndScorecardFromRealPublicSources() {
+        var component = new Component("pkg:maven/org.apache.commons/commons-lang3@3.14.0", "maven", "org.apache.commons:commons-lang3", "3.14.0", Map.of());
+        var result = new ScorecardHealthAdapter(new ExternalJsonClient(true)).assess(List.of(component)).get(component.purl());
+        assertEquals(EvidenceStatus.DISPONIBLE, result.repository().status(), result.repository().diagnostic());
+        assertEquals("github.com/apache/commons-lang", result.repository().value().id());
+        assertEquals(EvidenceStatus.DISPONIBLE, result.scorecard().status(), result.scorecard().diagnostic());
+        assertTrue(result.repository().value().method().endsWith("_GITBOX_REDIRECT_V1"));
+        assertTrue(result.associationEvidence().stream().anyMatch(value -> value.source().equals("https://gitbox.apache.org/repos/asf/commons-lang.git")
+            && value.value() != null && value.value().contains("Location: https://github.com/apache/commons-lang")));
     }
     @Test @EnabledIfEnvironmentVariable(named = "SMARTSCA_TEST_EXTERNAL", matches = "true")
     void readsPublishedGsonInheritedScmAndScorecardFromRealPublicSources() {

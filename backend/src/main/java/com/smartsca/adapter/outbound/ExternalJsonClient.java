@@ -15,11 +15,17 @@ public final class ExternalJsonClient {
     /** Keeps HTTP absence distinguishable from transport or invalid-response failures. */
     public static final class HttpStatusException extends IllegalArgumentException {
         private final int statusCode;
+        private final String location;
         public HttpStatusException(int statusCode) {
+            this(statusCode, null);
+        }
+        public HttpStatusException(int statusCode, String location) {
             super("La fuente respondió HTTP " + statusCode + ".");
             this.statusCode = statusCode;
+            this.location = location;
         }
         public int statusCode() { return statusCode; }
+        public String location() { return location; }
     }
     public record Response(JsonNode json, Instant collectedAt) {}
     public record Document(byte[] bytes, Instant collectedAt) {
@@ -67,7 +73,7 @@ public final class ExternalJsonClient {
                 var response = future.get(timeout.toNanos(), TimeUnit.NANOSECONDS);
                 int code = response.statusCode();
                 if ((code == 429 || code >= 500) && attempt == 0) { Thread.sleep(200); continue; }
-                if (code != 200) throw new HttpStatusException(code);
+                if (code != 200) throw new HttpStatusException(code, response.headers().firstValue("Location").orElse(null));
                 var result = new Document(response.body(), Instant.now());
                 // Up to 16 responses of 8 MiB; evict oldest entries, never reuse errors or expired data.
                 if (cache.size() >= 16) cache.remove(cache.keySet().iterator().next());
