@@ -23,6 +23,9 @@ class MavenResolutionTests {
             var graph = resolver.resolve(project, config);
             graphs.put(project.id(), graph);
             assertReference(project.id(), graph);
+            var sbom = new com.smartsca.adapter.outbound.sbom.CycloneDxSbomExporter().generateAndValidate(SbomTests.request(project, config), graph);
+            assertEquals("1.6", sbom.schemaVersion());
+            assertFalse(sbom.content().isBlank());
             assertEquals(project.modules(), graph.rootsByModule().keySet());
             assertTrue(graph.components().values().stream().allMatch(component -> component.purl().startsWith("pkg:maven/") && !component.version().isBlank()));
         }

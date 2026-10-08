@@ -3,6 +3,7 @@ package com.smartsca.adapter.inbound.rest;
 import com.smartsca.application.port.inbound.GetAnalysisUseCase;
 import com.smartsca.application.port.inbound.ListAnalysesUseCase;
 import com.smartsca.application.port.inbound.StartAnalysisUseCase;
+import com.smartsca.application.port.inbound.ExportAnalysisUseCase;
 import com.smartsca.domain.analysis.*;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -20,8 +21,9 @@ public class AnalysisController {
     private final StartAnalysisUseCase start;
     private final GetAnalysisUseCase query;
     private final ListAnalysesUseCase history;
-    public AnalysisController(StartAnalysisUseCase start, GetAnalysisUseCase query, ListAnalysesUseCase history) {
-        this.start = start; this.query = query; this.history = history;
+    private final ExportAnalysisUseCase exports;
+    public AnalysisController(StartAnalysisUseCase start, GetAnalysisUseCase query, ListAnalysesUseCase history, ExportAnalysisUseCase exports) {
+        this.start = start; this.query = query; this.history = history; this.exports = exports;
     }
 
     public record Catalog(List<Project> projects, AnalysisConfiguration defaults, List<String> scopes) {}
@@ -37,6 +39,14 @@ public class AnalysisController {
         return ResponseEntity.accepted().location(URI.create("/api/analyses/" + id)).body(new Accepted(id, AnalysisStatus.EN_COLA));
     }
     @GetMapping("/analyses/{id}") public Analysis get(@PathVariable UUID id) { return query.get(id); }
+    @GetMapping("/analyses/{id}/sbom/status") public ExportAnalysisUseCase.SbomStatus sbomStatus(@PathVariable UUID id) { return exports.sbomStatus(id); }
+    @GetMapping("/analyses/{id}/sbom") public ResponseEntity<byte[]> sbom(@PathVariable UUID id) {
+        var artifact = exports.downloadSbom(id);
+        return ResponseEntity.ok().header("Content-Type", "application/vnd.cyclonedx+json")
+            .header("Content-Disposition", "attachment; filename=\"smartsca-" + id + "-cyclonedx-1.6.json\"")
+            .header("X-Content-Type-Options", "nosniff").header("Cache-Control", "no-store")
+            .body(artifact.content().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
     @GetMapping("/analyses") public ListAnalysesUseCase.Page list(
             @RequestParam(required = false) String projectId, @RequestParam(required = false) AnalysisStatus status,
             @RequestParam(defaultValue = "0") int offset) { return history.list(projectId, status, offset); }

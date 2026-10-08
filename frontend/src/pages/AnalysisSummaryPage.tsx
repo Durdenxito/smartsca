@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { request, errorMessage, type Analysis, type ComponentItem, type RiskAssessment } from '../api/client';
 import AnalysisNotice from '../components/AnalysisNotice';
 import SourceAvailability from '../components/SourceAvailability';
+import SbomDownload from '../components/SbomDownload';
 
 const levels = ['CRITICA', 'ALTA', 'MEDIA', 'BAJA', 'PENDIENTE_REVISION'] as const;
 const checks = ['Maintained', 'Security-Policy', 'Code-Review', 'Dependency-Update-Tool'];
@@ -96,10 +97,11 @@ export default function AnalysisSummaryPage({ id }: { id: string }) {
       </table></div>
       <p className="muted">La vigencia de Scorecard usa la advertencia guardada, sin reevaluar fechas. La cobertura describe datos recuperados; no mide calidad ni certifica seguridad.</p>
       <SourceAvailability analysis={analysis} />
+      <SbomDownload key={id} id={id} revision={retry} />
       <h2>Limitaciones</h2>
       <ul><li>Alcanzabilidad no analizada; despliegue declarado no demuestra exposición real.</li>
         <li>Los pesos de prioridad son decisiones iniciales del prototipo; evaluación académica pendiente.</li>
-        <li>SBOM y exportación JSON todavía no disponibles en este prototipo.</li>
+        <li>Exportación JSON completa todavía no disponible en este prototipo.</li>
         <li>Fechas y evidencias pertenecen a esta instantánea y no garantizan disponibilidad actual de los proveedores.</li>
         {analysis.diagnostics.map((value, index) => <li key={index}>{value}</li>)}
       </ul>

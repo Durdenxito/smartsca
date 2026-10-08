@@ -11,17 +11,20 @@ public final class RunAnalysisService implements RunPendingAnalysesUseCase, Auto
     private final DependencyResolver resolver;
     private final EnrichAnalysisService enrichment;
     private final HealthSource healthSource;
+    private final SbomExporter sbomExporter;
     private final ExecutorService executor;
     private final Semaphore slots;
     private final Map<String, String> versions;
     // ponytail: retain at most concurrency results in this process; restart recovery remains PostgreSQL-backed.
-    private final Map<UUID, Analysis> pendingResults = new HashMap<>();
-    public RunAnalysisService(AnalysisRepository analyses, DependencyResolver resolver, EnrichAnalysisService enrichment, HealthSource healthSource, int concurrency, Map<String, String> versions) {
+    private record Result(Analysis analysis, AnalysisArtifact sbom) {}
+    private final Map<UUID, Result> pendingResults = new HashMap<>();
+    public RunAnalysisService(AnalysisRepository analyses, DependencyResolver resolver, EnrichAnalysisService enrichment, HealthSource healthSource, SbomExporter sbomExporter, int concurrency, Map<String, String> versions) {
         if (concurrency < 1 || concurrency > 4) throw new IllegalArgumentException("Concurrencia admitida: 1 a 4.");
         this.analyses = analyses;
         this.resolver = resolver;
         this.enrichment = enrichment;
         this.healthSource = healthSource;
+        this.sbomExporter = sbomExporter;
         this.versions = Map.copyOf(versions);
         this.slots = new Semaphore(concurrency);
         this.executor = Executors.newFixedThreadPool(concurrency);
@@ -40,6 +43,7 @@ public final class RunAnalysisService implements RunPendingAnalysesUseCase, Auto
         boolean retained = false;
         try {
             Analysis result;
+            AnalysisArtifact sbom = null;
             try {
                 var graph = resolver.resolve(analysis.project(), analysis.configuration());
                 analyses.updateStep(analysis.id(), "CONSULTANDO_EVIDENCIAS_EXTERNAS");
@@ -55,17 +59,21 @@ public final class RunAnalysisService implements RunPendingAnalysesUseCase, Auto
                 long failed = snapshot.componentQueries().values().stream().filter(value -> value.status() != com.smartsca.domain.EvidenceStatus.DISPONIBLE).count();
                 analyses.updateStep(analysis.id(), "EVALUANDO_PRIORIDAD");
                 var risk = new com.smartsca.domain.risk.RiskPolicy().evaluate(snapshot, graph, analysis.configuration(), health);
+                analyses.updateStep(analysis.id(), "GENERANDO_Y_VALIDANDO_SBOM");
+                String sbomDiagnostic;
+                try { sbom = sbomExporter.generateAndValidate(analysis, graph); sbomDiagnostic = "SBOM CycloneDX 1.6 generado y validado."; }
+                catch (RuntimeException error) { sbomDiagnostic = "SBOM no disponible: la generación o validación no se completó. Se conservan inventario y evidencias."; }
                 result = analysis.finished(AnalysisStatus.PARCIAL, "INVENTARIO_Y_EVIDENCIAS_DISPONIBLES",
                     List.of("Resolución Maven completada. " + snapshot.findings().size() + " hallazgos identificados; " + failed + " consultas OSV incompletas.",
                         "Salud consultada para " + health.size() + " componentes. Prioridad evaluada con " + risk.policy().version() +
-                        "; " + risk.assessments().stream().filter(value -> value.score() == null).count() + " hallazgos pendientes de revisión. SBOM aún no generado."), versions, graph, snapshot, health, risk);
+                        "; " + risk.assessments().stream().filter(value -> value.score() == null).count() + " hallazgos pendientes de revisión. Evaluación académica pendiente.", sbomDiagnostic), versions, graph, snapshot, health, risk);
             } catch (RuntimeException error) {
                 String message = error instanceof IllegalArgumentException && error.getMessage() != null
                     ? error.getMessage() : "No se pudo completar la resolución Maven.";
                 result = analysis.finished(AnalysisStatus.FALLIDO, "RESOLUCION_FALLIDA", List.of(message), versions, null, null, null, null);
             }
             synchronized (this) {
-                pendingResults.put(result.id(), result);
+                pendingResults.put(result.id(), new Result(result, sbom));
                 retained = true;
                 persistCompleted();
             }
@@ -80,12 +88,12 @@ public final class RunAnalysisService implements RunPendingAnalysesUseCase, Auto
         while (pending.hasNext()) {
             var result = pending.next();
             try {
-                analyses.finish(result);
+                analyses.finish(result.analysis(), result.sbom());
                 pending.remove();
                 slots.release();
             } catch (RuntimeException error) {
                 System.getLogger(RunAnalysisService.class.getName()).log(System.Logger.Level.ERROR,
-                    "Resultado pendiente de persistir; se reintentará para " + result.id(), error);
+                    "Resultado pendiente de persistir; se reintentará para " + result.analysis().id(), error);
             }
         }
     }

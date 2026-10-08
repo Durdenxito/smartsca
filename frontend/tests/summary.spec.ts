@@ -28,6 +28,7 @@ test('counts correlated findings, versions, zero scores and pending separately a
   const requests: string[] = [];
   await page.route('**/api/analyses/**', route => {
     const url = route.request().url(); requests.push(url);
+    if (url.endsWith('/sbom/status')) return route.fulfill({ json: { available: false } });
     return route.fulfill({ json: url.endsWith('/components') ? items : record() });
   });
   await page.goto(`/#analysis/${id}/summary`);
@@ -48,13 +49,14 @@ test('counts correlated findings, versions, zero scores and pending separately a
   await expect(page.locator('script').filter({ hasText: 'fuente fallida' })).toHaveCount(0);
   await page.reload();
   await expect(metric(page, 'Hallazgos componente-vulnerabilidad')).toHaveText('4');
-  expect(requests.every(url => url.endsWith(`/analyses/${id}`) || url.endsWith(`/analyses/${id}/components`))).toBe(true);
+  expect(requests.every(url => url.endsWith(`/analyses/${id}`) || url.endsWith(`/analyses/${id}/components`) || url.endsWith(`/analyses/${id}/sbom/status`))).toBe(true);
 });
 
 test('keeps failed, queued and legacy missing snapshots unknown and counts legacy findings pending', async ({ page }) => {
   let data: unknown = { ...record(), status: 'FALLIDO', dependencyGraph: null, vulnerabilitySnapshot: null, healthAssessments: null, riskSnapshot: null };
   let inventoryRequests = 0;
   await page.route('**/api/analyses/**', route => {
+    if (route.request().url().endsWith('/sbom/status')) return route.fulfill({ json: { available: false } });
     if (route.request().url().endsWith('/components')) { inventoryRequests++; return route.fulfill({ json: items }); }
     return route.fulfill({ json: data });
   });
@@ -76,6 +78,7 @@ test('keeps failed, queued and legacy missing snapshots unknown and counts legac
 
 test('preserves known findings on inventory failure and recovers the same identifier after retry', async ({ page }) => {
   let failure = true;
+  await page.route(`**/api/analyses/${id}/sbom/status`, route => route.fulfill({ json: { available: false } }));
   await page.route(`**/api/analyses/${id}`, route => route.fulfill({ json: record() }));
   await page.route(`**/api/analyses/${id}/components`, route => failure
     ? route.fulfill({ status: 503, json: { detail: 'Consulta de inventario temporalmente fallida' } }) : route.fulfill({ json: items }));

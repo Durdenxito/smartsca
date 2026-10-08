@@ -29,6 +29,8 @@ public class AnalysisConfigurationBeans {
         return new StartAnalysisService(projects, analyses, version == null ? "development" : version);
     }
     @Bean QueryAnalysisService queryAnalysis(AnalysisRepository analyses) { return new QueryAnalysisService(analyses); }
+    @Bean SbomExporter sbomExporter() { return new com.smartsca.adapter.outbound.sbom.CycloneDxSbomExporter(); }
+    @Bean ExportAnalysisUseCase exportAnalysis(AnalysisRepository analyses) { return new ExportAnalysisService(analyses); }
     @Bean DependencyResolver dependencyResolver(@Value("${smartsca.fixtures-root}") String root,
                                                 @Value("${smartsca.maven.timeout-seconds:180}") long seconds) {
         return new MavenDependencyResolver(new FixtureProjectSource(Path.of(root)), Duration.ofSeconds(seconds));
@@ -54,9 +56,9 @@ public class AnalysisConfigurationBeans {
         return new com.smartsca.adapter.outbound.scorecard.ScorecardHealthAdapter(http);
     }
     @Bean(destroyMethod = "close") RunAnalysisService runAnalysis(AnalysisRepository analyses, DependencyResolver resolver, EnrichAnalysisService enrichment,
-                                                               HealthSource health,
+                                                               HealthSource health, SbomExporter sbom,
                                                                @Value("${smartsca.worker.concurrency:1}") int concurrency) {
-        return new RunAnalysisService(analyses, resolver, enrichment, health, concurrency, MavenDependencyResolver.VERSIONS);
+        return new RunAnalysisService(analyses, resolver, enrichment, health, sbom, concurrency, MavenDependencyResolver.VERSIONS);
     }
     @Bean @ConditionalOnProperty(name = "smartsca.worker.enabled", havingValue = "true", matchIfMissing = true)
     AnalysisWorker worker(RunPendingAnalysesUseCase useCase) { return new AnalysisWorker(useCase); }

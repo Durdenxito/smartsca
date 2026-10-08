@@ -6,6 +6,7 @@ import com.smartsca.domain.analysis.AnalysisConfiguration;
 import java.util.Set;
 import java.util.Arrays;
 import com.smartsca.domain.analysis.Analysis;
+import com.smartsca.domain.analysis.AnalysisArtifact;
 import jakarta.persistence.EntityManager;
 import java.util.Optional;
 import java.util.UUID;
@@ -60,7 +61,11 @@ public class JpaAnalysisRepository implements AnalysisRepository {
             .setParameter("step", step).setParameter("id", id).setParameter("status", AnalysisStatus.EN_EJECUCION).executeUpdate();
         manager.clear();
     }
-    @Override @Transactional public void finish(Analysis analysis) {
+    @Override @Transactional(readOnly = true) public Optional<AnalysisArtifact> readSbom(UUID id) {
+        return Optional.ofNullable(manager.find(AnalysisArtifactEntity.class, id)).map(AnalysisArtifactEntity::toDomain);
+    }
+    @Override @Transactional public void finish(Analysis analysis) { finish(analysis, null); }
+    @Override @Transactional public void finish(Analysis analysis, AnalysisArtifact sbom) {
         var entity = manager.find(AnalysisEntity.class, analysis.id(), jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
         if (entity == null) throw new IllegalStateException("El trabajo no existe.");
         // A committed write may lose its acknowledgement; retry without replacing an existing terminal result.
@@ -77,6 +82,7 @@ public class JpaAnalysisRepository implements AnalysisRepository {
         entity.vulnerabilitySnapshot = analysis.vulnerabilitySnapshot();
         entity.healthAssessments = analysis.healthAssessments();
         entity.riskSnapshot = analysis.riskSnapshot();
+        if (sbom != null) manager.persist(AnalysisArtifactEntity.from(analysis.id(), sbom));
     }
     @Override @Transactional public void failInterrupted() {
         // ponytail: one backend process; add owner leases before running multiple replicas.

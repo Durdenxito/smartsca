@@ -25,7 +25,8 @@ class AnalysisRegistrationTests {
             public com.smartsca.application.port.inbound.ListAnalysesUseCase.Page list(String project, AnalysisStatus status, int offset) { throw new UnsupportedOperationException(); }
             public Optional<Analysis> claimNextPending() { return Optional.empty(); }
             public void updateStep(UUID id, String step) { }
-            public void finish(Analysis value) { saved.put(value.id(), value); }
+            public void finish(Analysis value, AnalysisArtifact sbom) { saved.put(value.id(), value); }
+            public Optional<AnalysisArtifact> readSbom(UUID id) { return Optional.empty(); }
             public void failInterrupted() { }
         };
         var start = new StartAnalysisService(source, repository, "test");

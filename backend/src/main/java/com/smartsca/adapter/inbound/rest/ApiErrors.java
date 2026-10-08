@@ -13,6 +13,8 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 /** Public errors contain actionable messages rather than internal paths or database details. */
 @RestControllerAdvice
 public class ApiErrors {
+    @ExceptionHandler(com.smartsca.application.port.inbound.ExportAnalysisUseCase.ArtifactUnavailableException.class)
+    ProblemDetail artifactUnavailable(Exception error) { return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, error.getMessage()); }
     @ExceptionHandler(IllegalArgumentException.class)
     ProblemDetail invalid(IllegalArgumentException error) { return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, error.getMessage()); }
     @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentNotValidException.class, MethodArgumentTypeMismatchException.class,

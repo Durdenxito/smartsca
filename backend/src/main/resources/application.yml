@@ -9,6 +9,8 @@ spring:
       connection-timeout: 5000
   jpa:
     open-in-view: false
+    properties:
+      hibernate.type.json_format_mapper: jackson3
     hibernate:
       ddl-auto: validate
 
