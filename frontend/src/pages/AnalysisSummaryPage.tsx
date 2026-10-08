@@ -3,6 +3,7 @@ import { request, errorMessage, type Analysis, type ComponentItem, type RiskAsse
 import AnalysisNotice from '../components/AnalysisNotice';
 import SourceAvailability from '../components/SourceAvailability';
 import SbomDownload from '../components/SbomDownload';
+import ArtifactDownload from '../components/ArtifactDownload';
 
 const levels = ['CRITICA', 'ALTA', 'MEDIA', 'BAJA', 'PENDIENTE_REVISION'] as const;
 const checks = ['Maintained', 'Security-Policy', 'Code-Review', 'Dependency-Update-Tool'];
@@ -98,10 +99,13 @@ export default function AnalysisSummaryPage({ id }: { id: string }) {
       <p className="muted">La vigencia de Scorecard usa la advertencia guardada, sin reevaluar fechas. La cobertura describe datos recuperados; no mide calidad ni certifica seguridad.</p>
       <SourceAvailability analysis={analysis} />
       <SbomDownload key={id} id={id} revision={retry} />
+      <h2>Exportación del análisis</h2>
+      <p>JSON con esquema 1.0: conserva metadatos, grafo, hallazgos, salud, prioridades, explicaciones y evidencias guardadas, cobertura y limitaciones. Los análisis fallidos incluyen su diagnóstico y secciones no obtenidas; los valores desconocidos permanecen desconocidos.</p>
+      <ArtifactDownload key={`${id}-${retry}`} url={`/api/analyses/${encodeURIComponent(id)}/export`} filename={`smartsca-${id}-analysis-v1.json`}
+        contentType="application/json" label="Descargar resultados JSON" />
       <h2>Limitaciones</h2>
       <ul><li>Alcanzabilidad no analizada; despliegue declarado no demuestra exposición real.</li>
         <li>Los pesos de prioridad son decisiones iniciales del prototipo; evaluación académica pendiente.</li>
-        <li>Exportación JSON completa todavía no disponible en este prototipo.</li>
         <li>Fechas y evidencias pertenecen a esta instantánea y no garantizan disponibilidad actual de los proveedores.</li>
         {analysis.diagnostics.map((value, index) => <li key={index}>{value}</li>)}
       </ul>

@@ -39,6 +39,11 @@ public class AnalysisController {
         return ResponseEntity.accepted().location(URI.create("/api/analyses/" + id)).body(new Accepted(id, AnalysisStatus.EN_COLA));
     }
     @GetMapping("/analyses/{id}") public Analysis get(@PathVariable UUID id) { return query.get(id); }
+    @GetMapping("/analyses/{id}/export") public ResponseEntity<ExportAnalysisUseCase.JsonExport> export(@PathVariable UUID id) {
+        return ResponseEntity.ok().header("Content-Type", "application/json")
+            .header("Content-Disposition", "attachment; filename=\"smartsca-" + id + "-analysis-v1.json\"")
+            .header("X-Content-Type-Options", "nosniff").header("Cache-Control", "no-store").body(exports.downloadJson(id));
+    }
     @GetMapping("/analyses/{id}/sbom/status") public ExportAnalysisUseCase.SbomStatus sbomStatus(@PathVariable UUID id) { return exports.sbomStatus(id); }
     @GetMapping("/analyses/{id}/sbom") public ResponseEntity<byte[]> sbom(@PathVariable UUID id) {
         var artifact = exports.downloadSbom(id);
