@@ -21,6 +21,8 @@ public final class StartAnalysisService implements StartAnalysisUseCase {
     }
 
     @Override public List<Project> listProjects() { return projects.listProjects(); }
+    @Override public Project importZip(java.io.InputStream input, String filename) { return projects.importZip(input, filename); }
+    @Override public Project importGit(String url) { return projects.importGit(url); }
 
     @Override public UUID start(String projectId, AnalysisConfiguration configuration) {
         var selected = configuration == null ? AnalysisConfiguration.defaults() : configuration;

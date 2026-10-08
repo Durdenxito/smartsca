@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { request, errorMessage, type Catalog } from '../api/client';
+import ProjectImport from '../components/ProjectImport';
 
 export default function NewAnalysisPage() {
   const [catalog, setCatalog] = useState<Catalog>();
@@ -49,6 +50,10 @@ export default function NewAnalysisPage() {
     <section aria-labelledby="new-analysis-title">
       <h1 id="new-analysis-title">Nuevo análisis</h1>
       <p>Selecciona un proyecto del catálogo y guarda su configuración de análisis.</p>
+      {catalog && <ProjectImport onImported={project => {
+        setCatalog(current => current ? { ...current, projects: [...current.projects.filter(value => value.id !== project.id), project] } : current);
+        setProjectId(project.id); setModules(['.']); setProfiles([]); setError('');
+      }} />}
       {error && <p role="alert" className="error">{error}</p>}
       {!catalog ? <>
         {!error && <p role="status">Cargando catálogo…</p>}

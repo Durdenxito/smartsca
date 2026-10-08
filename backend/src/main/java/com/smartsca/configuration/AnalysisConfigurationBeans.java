@@ -20,8 +20,9 @@ import java.time.Duration;
 /** Connects the pure application core with its concrete adapters. */
 @Configuration @EnableScheduling
 public class AnalysisConfigurationBeans {
-    @Bean ProjectSource projects(@Value("${smartsca.fixtures-root}") String root) {
-        return new FixtureProjectSource(Path.of(root));
+    @Bean ProjectSource projects(@Value("${smartsca.fixtures-root}") String root,
+                                @Value("${smartsca.imports-root}") String imports) {
+        return new com.smartsca.adapter.outbound.maven.ImportedProjectSource(Path.of(root), Path.of(imports));
     }
     @Bean AnalysisRepository analyses(EntityManager manager) { return new JpaAnalysisRepository(manager); }
     @Bean StartAnalysisUseCase startAnalysis(ProjectSource projects, AnalysisRepository analyses) {
@@ -31,9 +32,9 @@ public class AnalysisConfigurationBeans {
     @Bean QueryAnalysisService queryAnalysis(AnalysisRepository analyses) { return new QueryAnalysisService(analyses); }
     @Bean SbomExporter sbomExporter() { return new com.smartsca.adapter.outbound.sbom.CycloneDxSbomExporter(); }
     @Bean ExportAnalysisUseCase exportAnalysis(AnalysisRepository analyses) { return new ExportAnalysisService(analyses); }
-    @Bean DependencyResolver dependencyResolver(@Value("${smartsca.fixtures-root}") String root,
+    @Bean DependencyResolver dependencyResolver(ProjectSource projects,
                                                 @Value("${smartsca.maven.timeout-seconds:180}") long seconds) {
-        return new MavenDependencyResolver(new FixtureProjectSource(Path.of(root)), Duration.ofSeconds(seconds));
+        return new MavenDependencyResolver(projects, Duration.ofSeconds(seconds));
     }
     @Bean com.smartsca.adapter.outbound.ExternalJsonClient externalJson(@Value("${smartsca.enrichment.enabled:true}") boolean enabled) {
         return new com.smartsca.adapter.outbound.ExternalJsonClient(enabled);

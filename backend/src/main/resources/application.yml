@@ -1,4 +1,8 @@
 spring:
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 11MB
   application:
     name: smartsca
   datasource:
@@ -15,6 +19,7 @@ spring:
       ddl-auto: validate
 
 smartsca:
+  imports-root: ${SMARTSCA_IMPORTS:../.smartsca/projects}
   fixtures-root: ${SMARTSCA_FIXTURES:../fixtures}
   enrichment:
     enabled: ${SMARTSCA_ENRICHMENT_ENABLED:true}

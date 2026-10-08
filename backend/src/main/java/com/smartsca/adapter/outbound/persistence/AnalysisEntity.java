@@ -18,7 +18,7 @@ public class AnalysisEntity {
     @Id UUID id;
     @Column(nullable = false, length = 64) String projectId;
     @Column(nullable = false) String projectName;
-    @Column(nullable = false) String sourceReference;
+    @Column(nullable = false, length = 512) String sourceReference;
     @Column(nullable = false, length = 128) String analyzedReference;
     @Column(nullable = false, columnDefinition = "text[]") String[] modules;
     @Column(nullable = false, columnDefinition = "text[]") String[] profiles;

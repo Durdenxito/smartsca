@@ -1,6 +1,7 @@
 package com.smartsca.adapter.outbound.maven;
 
 import com.smartsca.application.port.outbound.DependencyResolver;
+import com.smartsca.application.port.outbound.ProjectSource;
 import com.smartsca.domain.analysis.*;
 import com.smartsca.domain.component.DependencyGraph;
 import java.nio.file.*;
@@ -12,9 +13,9 @@ import java.util.concurrent.TimeUnit;
 public final class MavenDependencyResolver implements DependencyResolver {
     public static final String IMAGE = "smartsca-maven:3.9.9-jdk21-plugin3.11.0";
     public static final Map<String, String> VERSIONS = Map.of("jdk", "21.0.7+6", "maven", "3.9.9", "dependencyPlugin", "3.11.0", "image", IMAGE);
-    private final FixtureProjectSource source;
+    private final ProjectSource source;
     private final Duration timeout;
-    public MavenDependencyResolver(FixtureProjectSource source, Duration timeout) {
+    public MavenDependencyResolver(ProjectSource source, Duration timeout) {
         if (timeout.isNegative() || timeout.isZero() || timeout.compareTo(Duration.ofMinutes(10)) > 0)
             throw new IllegalArgumentException("Tiempo de resolución admitido: hasta diez minutos.");
         this.source = source;

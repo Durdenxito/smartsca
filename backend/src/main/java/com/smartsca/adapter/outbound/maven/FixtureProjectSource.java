@@ -30,7 +30,7 @@ public final class FixtureProjectSource implements ProjectSource {
             throw new IllegalArgumentException("El módulo raíz ya incluye el reactor completo.");
         return project;
     }
-    public void snapshot(Project expected, AnalysisConfiguration configuration, Path destination) {
+    @Override public void snapshot(Project expected, AnalysisConfiguration configuration, Path destination) {
         Project current = validate(expected.id(), configuration);
         if (expected.analyzedReference().startsWith("pom-sha256:"))
             throw new IllegalArgumentException("La solicitud usa una referencia anterior del catálogo. Registra un nuevo análisis.");
@@ -88,9 +88,12 @@ public final class FixtureProjectSource implements ProjectSource {
             collect(root, root.relativize(directory.resolve(relative).normalize()).toString().replace('\\', '/'), modules, profiles);
         }
     }
-    private static Element pom(Path path) throws Exception {
+    static Element pom(Path path) throws Exception {
         byte[] bytes;
         try (var input = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS)) { bytes = input.readNBytes(1_048_577); }
+        return pom(bytes);
+    }
+    static Element pom(byte[] bytes) throws Exception {
         if (bytes.length > 1_048_576) throw new IllegalArgumentException("El POM supera el tamaño admitido.");
         var factory = DocumentBuilderFactory.newInstance();
         factory.setNamespaceAware(true);
@@ -100,6 +103,15 @@ public final class FixtureProjectSource implements ProjectSource {
         factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
         Element project = factory.newDocumentBuilder().parse(new java.io.ByteArrayInputStream(bytes)).getDocumentElement();
         if (!"project".equals(project.getLocalName()) || text(project, "artifactId").isBlank()) throw new IllegalArgumentException("POM Maven no válido.");
+        var extensions = project.getElementsByTagNameNS("*", "extensions");
+        for (int i = 0; i < extensions.getLength(); i++) {
+            var extension = extensions.item(i);
+            if (!(extension.getParentNode() instanceof Element owner) || !Set.of("build", "plugin").contains(owner.getLocalName())) continue;
+            boolean structured = false;
+            for (var node = extension.getFirstChild(); node != null; node = node.getNextSibling()) if (node instanceof Element) structured = true;
+            String value = extension.getTextContent().strip();
+            if (structured || (!value.isEmpty() && !value.equalsIgnoreCase("false"))) throw new IllegalArgumentException("No se admiten extensiones de compilación Maven ni plugins con extensions=true.");
+        }
         return project;
     }
     private static List<Path> files(Path folder) throws java.io.IOException {
@@ -146,6 +158,6 @@ public final class FixtureProjectSource implements ProjectSource {
             if (node instanceof Element element && name.equals(element.getLocalName())) result.add(element);
         return result;
     }
-    private static Element child(Element parent, String name) { return children(parent, name).stream().findFirst().orElse(null); }
-    private static String text(Element parent, String name) { Element found = child(parent, name); return found == null ? "" : found.getTextContent().strip(); }
+    static Element child(Element parent, String name) { return children(parent, name).stream().findFirst().orElse(null); }
+    static String text(Element parent, String name) { Element found = child(parent, name); return found == null ? "" : found.getTextContent().strip(); }
 }

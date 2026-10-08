@@ -34,6 +34,15 @@ public class AnalysisController {
     @GetMapping("/projects") public Catalog projects() {
         return new Catalog(start.listProjects(), AnalysisConfiguration.defaults(), AnalysisConfiguration.SUPPORTED_SCOPES.stream().sorted().toList());
     }
+    public record GitImportRequest(@NotBlank @Size(max = 255) String url) {}
+    @PostMapping(value = "/projects/import/zip", consumes = "multipart/form-data")
+    public ResponseEntity<Project> importZip(@RequestParam("file") org.springframework.web.multipart.MultipartFile file) throws java.io.IOException {
+        if (file.isEmpty() || file.getSize() > 10 * 1024 * 1024) throw new IllegalArgumentException("Selecciona un ZIP de hasta 10 MiB.");
+        try (var input = file.getInputStream()) { return ResponseEntity.status(201).body(start.importZip(input, file.getOriginalFilename())); }
+    }
+    @PostMapping("/projects/import/git") public ResponseEntity<Project> importGit(@Valid @RequestBody GitImportRequest request) {
+        return ResponseEntity.status(201).body(start.importGit(request.url()));
+    }
     @PostMapping("/analyses") public ResponseEntity<Accepted> register(@Valid @RequestBody StartRequest request) {
         UUID id = start.start(request.projectId(), request.configuration());
         return ResponseEntity.accepted().location(URI.create("/api/analyses/" + id)).body(new Accepted(id, AnalysisStatus.EN_COLA));

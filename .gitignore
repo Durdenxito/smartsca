@@ -13,3 +13,5 @@ Thumbs.db
 **/__pycache__/
 **/test-results/
 **/playwright-report/
+# Managed user projects and archives are runtime data, never project code.
+.smartsca/
