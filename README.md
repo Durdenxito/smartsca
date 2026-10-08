@@ -178,8 +178,11 @@ classDiagram
   }
   class c9["com.smartsca.adapter.outbound.ExternalJsonClient.HttpStatusException"] {
     -int statusCode
+    -String location
     +HttpStatusException(int statusCode) 
+    +HttpStatusException(int statusCode, String location) 
     +statusCode() int
+    +location() String
   }
   class c10["com.smartsca.adapter.outbound.ExternalJsonClient.Response"] {
     <<record>>
@@ -367,10 +370,14 @@ classDiagram
     -ExternalJsonClient http
     -URI metadata
     -URI central
+    -URI gitbox
     +ScorecardHealthAdapter(ExternalJsonClient http) 
     +ScorecardHealthAdapter(ExternalJsonClient http, URI metadata, URI central) 
+    +ScorecardHealthAdapter(ExternalJsonClient http, URI metadata, URI central, URI gitbox) 
     +assess(List~Component~ components) Map~String, HealthAssessment~
     -inspect(Component component, long deadline) HealthAssessment
+    -gitboxMirror(String name, long deadline, List~Evidence~String~~ evidence) String
+    -gitboxRepository(String value) String
     -publishedPoms(String groupId, String artifactId, String version, long deadline, List~Evidence~String~~ evidence, List~Element~ poms, Set~String~ seen) void
     -properties(Element pom) Map~String, String~
     -interpolate(String value, Map~String, String~ properties, Set~String~ profileProperties) String
