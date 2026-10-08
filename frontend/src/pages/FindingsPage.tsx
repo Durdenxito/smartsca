@@ -22,6 +22,30 @@ function Observation<T>({ evidence, children }: { evidence: Evidence<T>; childre
       {evidence.sourceDate && ` · Fecha de la fuente: ${evidence.sourceDate}`}</p>
   </div>;
 }
+function Recommendations({ vulnerability, item, analysisId }: { vulnerability: Vulnerability; item: ComponentItem; analysisId: string }) {
+  const advisories = Object.entries(vulnerability.advisories).sort(([a], [b]) => a.localeCompare(b));
+  return <details><summary>Recomendaciones básicas de {vulnerability.id}</summary>
+    <p>Versión instalada: {item.component.name} @ {item.component.version}. Revisar las correcciones publicadas y sus rangos para este paquete.</p>
+    <p>No se elige automáticamente una versión: las correcciones pueden pertenecer a ramas distintas. No se garantiza compatibilidad, compilación ni ausencia de otras vulnerabilidades; una versión patch o minor no demuestra bajo riesgo de migración.</p>
+    <p>Si la dependencia es directa en un módulo, revisar su declaración en el POM. Si es transitiva, revisar las dependencias que la introducen mediante las rutas guardadas. Un componente puede tener ambas condiciones según el módulo.</p>
+    <p><a href={`#analysis/${analysisId}/graph?component=${encodeURIComponent(item.component.purl)}`}>Consultar rutas de introducción</a></p>
+    {!advisories.length && <p>No hay avisos guardados para consultar correcciones. No se puede concluir que exista o no una versión corregida.</p>}
+    {advisories.map(([id, evidence]) => {
+      const affected = evidence.status === 'DISPONIBLE' ? evidence.value?.affected.filter(value => value.ecosystem === 'Maven' && value.name === item.component.name) ?? [] : [];
+      const fixed = [...new Set(affected.flatMap(value => value.fixedVersions))];
+      return <section key={id} aria-label={`Correcciones publicadas en ${id}`}>
+        <h3>Aviso de origen: {id}</h3>
+        <Observation evidence={evidence}>
+          {!affected.length ? <p>El aviso no contiene información del paquete Maven {item.component.name}; no se ofrecen correcciones de otro paquete.</p>
+            : fixed.length ? <p>Versiones corregidas publicadas: {fixed.join(', ')}.</p> : <p>El aviso no publica versiones corregidas para este paquete.</p>}
+          {affected.map((value, index) => <div key={index}><p>Rangos publicados de {value.name}:</p><pre>{value.ranges}</pre></div>)}
+        </Observation>
+        {evidence.status !== 'DISPONIBLE' && <p>Correcciones no consultables en este aviso: evidencia {evidence.status}. No se concluye ausencia de versiones corregidas.</p>}
+      </section>;
+    })}
+    <p className="muted">Recomendaciones informativas sobre la instantánea. Consultar no modifica el proyecto, ejecuta Maven ni vuelve a consultar proveedores.</p>
+  </details>;
+}
 function VulnerabilityDetails({ vulnerability, componentName }: { vulnerability: Vulnerability; componentName: string }) {
   return <>
     <p>Identificadores y aliases: {[...vulnerability.aliases].sort().join(', ')}</p>
@@ -162,8 +186,8 @@ export default function FindingsPage({ id, initialPurl }: { id: string; initialP
           <h2>{finding.vulnerabilityId} · {item.component.name} @ {item.component.version}</h2>
           <code>{finding.componentPurl}</code>
           <p>{item.contexts.map(context => `${context.module} · ${context.scope} · ${context.direct ? 'Directa' : 'Transitiva'}`).join('; ')}</p>
-          <p><a href={`#analysis/${id}/graph?component=${encodeURIComponent(finding.componentPurl)}`}>Consultar rutas de introducción</a></p>
           <PriorityDetails assessment={assessments.get(`${finding.componentPurl}/${finding.vulnerabilityId}`)} />
+          <Recommendations vulnerability={vulnerabilities.get(finding.vulnerabilityId)!} item={item} analysisId={id} />
           <details><summary>Detalle de {finding.vulnerabilityId}</summary><VulnerabilityDetails vulnerability={vulnerabilities.get(finding.vulnerabilityId)!} componentName={item.component.name} /></details>
           <HealthDetails assessment={analysis.healthAssessments?.[finding.componentPurl]} />
         </li>;
