@@ -44,6 +44,21 @@ Solicitudes e instantáneas de análisis; el proyecto y la configuración se con
 | health_assessments | jsonb | Sí |  |  | RF-08 repository association evidence and published Scorecard checks by component purl; null for earlier analyses |
 | risk_snapshot | jsonb | Sí |  |  | Política versionada y evaluaciones ordenadas con contribuciones/evidencias. NULL: análisis anterior o prioridad no evaluada; consultar no recalcula. |
 
+### `public.analysis_artifacts`
+
+
+
+| Columna | Tipo | Nulo | Clave | Valor por defecto | Descripción |
+|---|---|---|---|---|---|
+| analysis_id | uuid | No | PK, FK |  |  |
+| schema_version | character varying(16) | No |  |  |  |
+| generated_at | timestamp with time zone | No |  |  |  |
+| sha256 | character varying(64) | No |  |  |  |
+| content | text | No |  |  |  |
+
+FK `analysis_artifacts_analysis_id_fkey`: `analysis_id` → `public.analyses (id)`.
+
+
 
 ### Diagrama de entidad relación
 
@@ -75,6 +90,14 @@ erDiagram
     jsonb health_assessments
     jsonb risk_snapshot
   }
+  t1["public.analysis_artifacts"] {
+    uuid analysis_id PK,FK
+    character_varying_16_ schema_version
+    timestamp_with_time_zone generated_at
+    character_varying_64_ sha256
+    text content
+  }
+  t0 ||--o| t1 : "analysis_artifacts_analysis_id_fkey"
 ```
 
 ### Diagrama de clases Java
@@ -95,10 +118,13 @@ classDiagram
     -StartAnalysisUseCase start
     -GetAnalysisUseCase query
     -ListAnalysesUseCase history
-    +AnalysisController(StartAnalysisUseCase start, GetAnalysisUseCase query, ListAnalysesUseCase history) 
+    -ExportAnalysisUseCase exports
+    +AnalysisController(StartAnalysisUseCase start, GetAnalysisUseCase query, ListAnalysesUseCase history, ExportAnalysisUseCase exports) 
     +projects() Catalog
     +register(StartRequest request) ResponseEntity~Accepted~
     +get(UUID id) Analysis
+    +sbomStatus(UUID id) ExportAnalysisUseCase.SbomStatus
+    +sbom(UUID id) ResponseEntity~byte[]~
     +list(String projectId, AnalysisStatus status, int offset) ListAnalysesUseCase.Page
     +components(UUID id, String search, String module, String scope, Boolean direct) List~GetAnalysisUseCase.ComponentItem~
     +graph(UUID id, String module, String purl, int offset) com.smartsca.domain.component.DependencyGraph.Neighborhood
@@ -121,6 +147,7 @@ classDiagram
     -AnalysisStatus status
   }
   class c6["com.smartsca.adapter.inbound.rest.ApiErrors"] {
+    ~artifactUnavailable(Exception error) ProblemDetail
     ~invalid(IllegalArgumentException error) ProblemDetail
     ~malformed(Exception error) ProblemDetail
     ~missing(NoSuchElementException error) ProblemDetail
@@ -180,7 +207,7 @@ classDiagram
     -child(Element parent, String name) Element
     -text(Element parent, String name) String
   }
-  c32 <|.. c12
+  c37 <|.. c12
   class c13["com.smartsca.adapter.outbound.maven.MavenDependencyResolver"] {
     +String IMAGE
     +Map~String, String~ VERSIONS
@@ -191,7 +218,7 @@ classDiagram
     -capture(List~String~ args, Path archive) void
     ~command(List~String~ arguments, Duration timeout) String
   }
-  c29 <|.. c13
+  c34 <|.. c13
   class c14["com.smartsca.adapter.outbound.maven.MavenTreeParser"] {
     +parse(Map~String, Tree~ trees, Set~String~ scopes) DependencyGraph
     -collect(JsonNode node, Map~String, Artifact~ resolved, int depth) void
@@ -226,8 +253,18 @@ classDiagram
     -readSeverity(JsonNode values, String id, List~Advisory.CvssScore~ result) boolean
     -version(JsonNode value) String
   }
-  c33 <|.. c17
-  class c18["com.smartsca.adapter.outbound.persistence.AnalysisEntity"] {
+  c39 <|.. c17
+  class c18["com.smartsca.adapter.outbound.persistence.AnalysisArtifactEntity"] {
+    ~UUID analysisId
+    ~String schemaVersion
+    ~Instant generatedAt
+    ~String sha256
+    ~String content
+    #AnalysisArtifactEntity() 
+    ~from(UUID id, AnalysisArtifact value) AnalysisArtifactEntity
+    ~toDomain() AnalysisArtifact
+  }
+  class c19["com.smartsca.adapter.outbound.persistence.AnalysisEntity"] {
     ~UUID id
     ~String projectId
     ~String projectName
@@ -256,7 +293,7 @@ classDiagram
     ~from(Analysis analysis) AnalysisEntity
     ~toDomain() Analysis
   }
-  class c19["com.smartsca.adapter.outbound.persistence.JpaAnalysisRepository"] {
+  class c20["com.smartsca.adapter.outbound.persistence.JpaAnalysisRepository"] {
     -EntityManager manager
     +JpaAnalysisRepository(EntityManager manager) 
     +save(Analysis analysis) void
@@ -264,11 +301,21 @@ classDiagram
     +list(String projectId, AnalysisStatus status, int offset) ListAnalysesUseCase.Page
     +claimNextPending() Optional~Analysis~
     +updateStep(UUID id, String step) void
+    +readSbom(UUID id) Optional~AnalysisArtifact~
     +finish(Analysis analysis) void
+    +finish(Analysis analysis, AnalysisArtifact sbom) void
     +failInterrupted() void
   }
-  c28 <|.. c19
-  class c20["com.smartsca.adapter.outbound.scorecard.ScorecardHealthAdapter"] {
+  c33 <|.. c20
+  class c21["com.smartsca.adapter.outbound.sbom.CycloneDxSbomExporter"] {
+    -JsonMapper json
+    +generateAndValidate(Analysis analysis, DependencyGraph graph) AnalysisArtifact
+    +validate(Analysis analysis, DependencyGraph graph, String content) void
+    -document(Analysis analysis, DependencyGraph graph, Instant generatedAt) Map~String, Object~
+    -property(String name, String value) Map~String, String~
+  }
+  c38 <|.. c21
+  class c22["com.smartsca.adapter.outbound.scorecard.ScorecardHealthAdapter"] {
     -ExternalJsonClient http
     -URI metadata
     -URI central
@@ -287,26 +334,42 @@ classDiagram
     -unavailable(String purl, String source, Instant time, EvidenceStatus status, List~Evidence~String~~ evidence, String reason) HealthAssessment
     -size(HealthAssessment assessment) long
   }
-  c31 <|.. c20
-  class c21["com.smartsca.application.port.inbound.GetAnalysisUseCase"] {
+  c36 <|.. c22
+  class c23["com.smartsca.application.port.inbound.ExportAnalysisUseCase"] {
+    <<interface>>
+    ~sbomStatus(UUID analysisId) SbomStatus
+    ~downloadSbom(UUID analysisId) AnalysisArtifact
+  }
+  class c24["com.smartsca.application.port.inbound.ExportAnalysisUseCase.SbomStatus"] {
+    <<record>>
+    -boolean available
+    -String schemaVersion
+    -Instant generatedAt
+    -String sha256
+    -String diagnostic
+  }
+  class c25["com.smartsca.application.port.inbound.ExportAnalysisUseCase.ArtifactUnavailableException"] {
+    +ArtifactUnavailableException() 
+  }
+  class c26["com.smartsca.application.port.inbound.GetAnalysisUseCase"] {
     <<interface>>
     ~get(UUID analysisId) Analysis
     ~components(UUID analysisId, String search, String module, String scope, Boolean direct) java.util.List~ComponentItem~
     ~graph(UUID analysisId, String module, String purl, int offset) com.smartsca.domain.component.DependencyGraph.Neighborhood
     ~routes(UUID analysisId, String purl, String module, int offset) com.smartsca.domain.component.DependencyGraph.Routes
   }
-  class c22["com.smartsca.application.port.inbound.GetAnalysisUseCase.ComponentItem"] {
+  class c27["com.smartsca.application.port.inbound.GetAnalysisUseCase.ComponentItem"] {
     <<record>>
     -com.smartsca.domain.component.Component component
     -java.util.List~com.smartsca.domain.component.DependencyGraph.Occurrence~ contexts
   }
-  class c23["com.smartsca.application.port.inbound.ListAnalysesUseCase"] {
+  class c28["com.smartsca.application.port.inbound.ListAnalysesUseCase"] {
     <<interface>>
     ~int PAGE_SIZE
     ~int MAX_OFFSET
     ~list(String projectId, AnalysisStatus status, int offset) Page
   }
-  class c24["com.smartsca.application.port.inbound.ListAnalysesUseCase.Entry"] {
+  class c29["com.smartsca.application.port.inbound.ListAnalysesUseCase.Entry"] {
     <<record>>
     -UUID id
     -String projectId
@@ -319,7 +382,7 @@ classDiagram
     -Instant startedAt
     -Instant finishedAt
   }
-  class c25["com.smartsca.application.port.inbound.ListAnalysesUseCase.Page"] {
+  class c30["com.smartsca.application.port.inbound.ListAnalysesUseCase.Page"] {
     <<record>>
     -List~Entry~ items
     -int offset
@@ -327,17 +390,17 @@ classDiagram
     -boolean navigationLimited
     +Page(List~Entry~ items, int offset, Integer nextOffset, boolean navigationLimited) 
   }
-  class c26["com.smartsca.application.port.inbound.RunPendingAnalysesUseCase"] {
+  class c31["com.smartsca.application.port.inbound.RunPendingAnalysesUseCase"] {
     <<interface>>
     ~runPending(int maxConcurrent) void
     ~failInterrupted() void
   }
-  class c27["com.smartsca.application.port.inbound.StartAnalysisUseCase"] {
+  class c32["com.smartsca.application.port.inbound.StartAnalysisUseCase"] {
     <<interface>>
     ~listProjects() List~Project~
     ~start(String projectId, AnalysisConfiguration configuration) UUID
   }
-  class c28["com.smartsca.application.port.outbound.AnalysisRepository"] {
+  class c33["com.smartsca.application.port.outbound.AnalysisRepository"] {
     <<interface>>
     ~save(Analysis analysis) void
     ~get(UUID analysisId) Optional~Analysis~
@@ -345,37 +408,43 @@ classDiagram
     ~claimNextPending() Optional~Analysis~
     ~updateStep(UUID analysisId, String step) void
     ~finish(Analysis analysis) void
+    ~finish(Analysis analysis, AnalysisArtifact sbom) void
+    ~readSbom(UUID analysisId) Optional~AnalysisArtifact~
     ~failInterrupted() void
   }
-  class c29["com.smartsca.application.port.outbound.DependencyResolver"] {
+  class c34["com.smartsca.application.port.outbound.DependencyResolver"] {
     <<interface>>
     ~resolve(Project project, AnalysisConfiguration configuration) DependencyGraph
   }
-  class c30["com.smartsca.application.port.outbound.ExploitSignalsSource"] {
+  class c35["com.smartsca.application.port.outbound.ExploitSignalsSource"] {
     <<interface>>
     ~epss(Set~String~ cves) Map~String, Evidence~Epss~~
     ~kev(Set~String~ cves) Map~String, Evidence~Boolean~~
   }
-  class c31["com.smartsca.application.port.outbound.HealthSource"] {
+  class c36["com.smartsca.application.port.outbound.HealthSource"] {
     <<interface>>
     ~assess(List~Component~ components) Map~String, HealthAssessment~
   }
-  class c32["com.smartsca.application.port.outbound.ProjectSource"] {
+  class c37["com.smartsca.application.port.outbound.ProjectSource"] {
     <<interface>>
     ~listProjects() List~Project~
     ~validate(String projectId, AnalysisConfiguration configuration) Project
   }
-  class c33["com.smartsca.application.port.outbound.VulnerabilitySource"] {
+  class c38["com.smartsca.application.port.outbound.SbomExporter"] {
+    <<interface>>
+    ~generateAndValidate(Analysis analysis, DependencyGraph graph) AnalysisArtifact
+  }
+  class c39["com.smartsca.application.port.outbound.VulnerabilitySource"] {
     <<interface>>
     ~lookup(List~Component~ components) Result
   }
-  class c34["com.smartsca.application.port.outbound.VulnerabilitySource.Result"] {
+  class c40["com.smartsca.application.port.outbound.VulnerabilitySource.Result"] {
     <<record>>
     -Map~String, Evidence~List~String~~~ queries
     -Map~String, Evidence~Advisory~~ advisories
     -Map~String, Set~String~~ identified
   }
-  class c35["com.smartsca.application.service.EnrichAnalysisService"] {
+  class c41["com.smartsca.application.service.EnrichAnalysisService"] {
     -VulnerabilitySource vulnerabilities
     -ExploitSignalsSource signals
     +EnrichAnalysisService(VulnerabilitySource vulnerabilities, ExploitSignalsSource signals) 
@@ -383,7 +452,15 @@ classDiagram
     -observe(String source, Set~String~ ids, java.util.function.Supplier~Map~String, Evidence~T~~~ query) Map~String, Evidence~T~~
     -aggregate(String source, Map~String, Evidence~T~~ values, boolean complete) Evidence~Map~String, Evidence~T~~~
   }
-  class c36["com.smartsca.application.service.QueryAnalysisService"] {
+  class c42["com.smartsca.application.service.ExportAnalysisService"] {
+    -AnalysisRepository analyses
+    +ExportAnalysisService(AnalysisRepository analyses) 
+    -saved(UUID id) Optional~AnalysisArtifact~
+    +sbomStatus(UUID id) SbomStatus
+    +downloadSbom(UUID id) AnalysisArtifact
+  }
+  c23 <|.. c42
+  class c43["com.smartsca.application.service.QueryAnalysisService"] {
     -AnalysisRepository analyses
     +QueryAnalysisService(AnalysisRepository analyses) 
     +get(UUID id) Analysis
@@ -393,26 +470,32 @@ classDiagram
     +routes(UUID id, String purl, String module, int offset) com.smartsca.domain.component.DependencyGraph.Routes
     +components(UUID id, String search, String module, String scope, Boolean direct) java.util.List~ComponentItem~
   }
-  c21 <|.. c36
-  c23 <|.. c36
-  class c37["com.smartsca.application.service.RunAnalysisService"] {
+  c26 <|.. c43
+  c28 <|.. c43
+  class c44["com.smartsca.application.service.RunAnalysisService"] {
     -AnalysisRepository analyses
     -DependencyResolver resolver
     -EnrichAnalysisService enrichment
     -HealthSource healthSource
+    -SbomExporter sbomExporter
     -ExecutorService executor
     -Semaphore slots
     -Map~String, String~ versions
-    -Map~UUID, Analysis~ pendingResults
-    +RunAnalysisService(AnalysisRepository analyses, DependencyResolver resolver, EnrichAnalysisService enrichment, HealthSource healthSource, int concurrency, Map~String, String~ versions) 
+    -Map~UUID, Result~ pendingResults
+    +RunAnalysisService(AnalysisRepository analyses, DependencyResolver resolver, EnrichAnalysisService enrichment, HealthSource healthSource, SbomExporter sbomExporter, int concurrency, Map~String, String~ versions) 
     +runPending(int maxConcurrent) void
     -run(Analysis analysis) void
     -persistCompleted() void
     +failInterrupted() void
     +close() void
   }
-  c26 <|.. c37
-  class c38["com.smartsca.application.service.StartAnalysisService"] {
+  c31 <|.. c44
+  class c45["com.smartsca.application.service.RunAnalysisService.Result"] {
+    <<record>>
+    -Analysis analysis
+    -AnalysisArtifact sbom
+  }
+  class c46["com.smartsca.application.service.StartAnalysisService"] {
     -ProjectSource projects
     -AnalysisRepository analyses
     -String engineVersion
@@ -420,22 +503,24 @@ classDiagram
     +listProjects() List~Project~
     +start(String projectId, AnalysisConfiguration configuration) UUID
   }
-  c27 <|.. c38
-  class c39["com.smartsca.configuration.AnalysisConfigurationBeans"] {
+  c32 <|.. c46
+  class c47["com.smartsca.configuration.AnalysisConfigurationBeans"] {
     ~projects(String root) ProjectSource
     ~analyses(EntityManager manager) AnalysisRepository
     ~startAnalysis(ProjectSource projects, AnalysisRepository analyses) StartAnalysisUseCase
     ~queryAnalysis(AnalysisRepository analyses) QueryAnalysisService
+    ~sbomExporter() SbomExporter
+    ~exportAnalysis(AnalysisRepository analyses) ExportAnalysisUseCase
     ~dependencyResolver(String root, long seconds) DependencyResolver
     ~externalJson(boolean enabled) com.smartsca.adapter.outbound.ExternalJsonClient
     ~vulnerabilitySource(com.smartsca.adapter.outbound.ExternalJsonClient http) VulnerabilitySource
     ~exploitSignals(com.smartsca.adapter.outbound.ExternalJsonClient http) ExploitSignalsSource
     ~enrichment(VulnerabilitySource vulnerabilities, ExploitSignalsSource signals) EnrichAnalysisService
     ~healthSource(com.smartsca.adapter.outbound.ExternalJsonClient http) HealthSource
-    ~runAnalysis(AnalysisRepository analyses, DependencyResolver resolver, EnrichAnalysisService enrichment, HealthSource health, int concurrency) RunAnalysisService
+    ~runAnalysis(AnalysisRepository analyses, DependencyResolver resolver, EnrichAnalysisService enrichment, HealthSource health, SbomExporter sbom, int concurrency) RunAnalysisService
     ~worker(RunPendingAnalysesUseCase useCase) AnalysisWorker
   }
-  class c40["com.smartsca.domain.Evidence"] {
+  class c48["com.smartsca.domain.Evidence"] {
     <<record>>
     -String source
     -Instant collectedAt
@@ -448,14 +533,14 @@ classDiagram
     +available(String source, Instant time, String date, T value) Evidence~T~
     +absent(String source, EvidenceStatus status, String reason) Evidence~T~
   }
-  class c41["com.smartsca.domain.EvidenceStatus"] {
+  class c49["com.smartsca.domain.EvidenceStatus"] {
     <<enum>>
     +EvidenceStatus DISPONIBLE
     +EvidenceStatus NO_DISPONIBLE
     +EvidenceStatus NO_APLICABLE
     +EvidenceStatus ERROR
   }
-  class c42["com.smartsca.domain.analysis.Analysis"] {
+  class c50["com.smartsca.domain.analysis.Analysis"] {
     <<record>>
     -UUID id
     -Project project
@@ -475,7 +560,17 @@ classDiagram
     +Analysis(UUID id, Project project, AnalysisConfiguration configuration, AnalysisStatus status, String currentStep, Instant createdAt, Instant startedAt, Instant finishedAt, String engineVersion, List~String~ diagnostics, Map~String, String~ environmentVersions, DependencyGraph dependencyGraph, com.smartsca.domain.vulnerability.VulnerabilitySnapshot vulnerabilitySnapshot, Map~String, com.smartsca.domain.health.HealthAssessment~ healthAssessments, com.smartsca.domain.risk.RiskSnapshot riskSnapshot) 
     +finished(AnalysisStatus state, String step, List~String~ messages, Map~String, String~ versions, DependencyGraph graph, com.smartsca.domain.vulnerability.VulnerabilitySnapshot vulnerabilities, Map~String, com.smartsca.domain.health.HealthAssessment~ health, com.smartsca.domain.risk.RiskSnapshot risk) Analysis
   }
-  class c43["com.smartsca.domain.analysis.AnalysisConfiguration"] {
+  class c51["com.smartsca.domain.analysis.AnalysisArtifact"] {
+    <<record>>
+    -String schemaVersion
+    -Instant generatedAt
+    -String sha256
+    -String content
+    +int MAX_BYTES
+    +AnalysisArtifact(String schemaVersion, Instant generatedAt, String sha256, String content) 
+    +digest(String content) String
+  }
+  class c52["com.smartsca.domain.analysis.AnalysisConfiguration"] {
     <<record>>
     -Set~String~ modules
     -Set~String~ profiles
@@ -487,7 +582,7 @@ classDiagram
     -checked(Set~String~ values, boolean allowEmpty) Set~String~
     +defaults() AnalysisConfiguration
   }
-  class c44["com.smartsca.domain.analysis.AnalysisStatus"] {
+  class c53["com.smartsca.domain.analysis.AnalysisStatus"] {
     <<enum>>
     +AnalysisStatus EN_COLA
     +AnalysisStatus EN_EJECUCION
@@ -495,7 +590,7 @@ classDiagram
     +AnalysisStatus PARCIAL
     +AnalysisStatus FALLIDO
   }
-  class c45["com.smartsca.domain.analysis.Project"] {
+  class c54["com.smartsca.domain.analysis.Project"] {
     <<record>>
     -String id
     -String name
@@ -505,7 +600,7 @@ classDiagram
     -java.util.Set~String~ profiles
     +Project(String id, String name, String sourceReference, String analyzedReference, java.util.Set~String~ modules, java.util.Set~String~ profiles) 
   }
-  class c46["com.smartsca.domain.component.Component"] {
+  class c55["com.smartsca.domain.component.Component"] {
     <<record>>
     -String purl
     -String ecosystem
@@ -514,19 +609,19 @@ classDiagram
     -Map~String, String~ metadata
     +Component(String purl, String ecosystem, String name, String version, Map~String, String~ metadata) 
   }
-  class c47["com.smartsca.domain.component.DependencyContext"] {
+  class c56["com.smartsca.domain.component.DependencyContext"] {
     <<record>>
     -String module
     -String originalScope
     -String normalizedContext
   }
-  class c48["com.smartsca.domain.component.DependencyEdge"] {
+  class c57["com.smartsca.domain.component.DependencyEdge"] {
     <<record>>
     -String parentPurl
     -String childPurl
     -DependencyContext context
   }
-  class c49["com.smartsca.domain.component.DependencyGraph"] {
+  class c58["com.smartsca.domain.component.DependencyGraph"] {
     <<record>>
     -Map~String, String~ rootsByModule
     -Map~String, Component~ components
@@ -540,14 +635,14 @@ classDiagram
     -requireComponent(String purl) void
     -Comparator~DependencyEdge~ EDGE_ORDER
   }
-  class c50["com.smartsca.domain.component.DependencyGraph.Occurrence"] {
+  class c59["com.smartsca.domain.component.DependencyGraph.Occurrence"] {
     <<record>>
     -String module
     -String scope
     -String originalScope
     -boolean direct
   }
-  class c51["com.smartsca.domain.component.DependencyGraph.Neighborhood"] {
+  class c60["com.smartsca.domain.component.DependencyGraph.Neighborhood"] {
     <<record>>
     -String module
     -Component root
@@ -558,13 +653,13 @@ classDiagram
     -int totalNeighbors
     -Integer nextOffset
   }
-  class c52["com.smartsca.domain.component.DependencyGraph.Route"] {
+  class c61["com.smartsca.domain.component.DependencyGraph.Route"] {
     <<record>>
     -String module
     -String rootPurl
     -List~DependencyEdge~ steps
   }
-  class c53["com.smartsca.domain.component.DependencyGraph.Routes"] {
+  class c62["com.smartsca.domain.component.DependencyGraph.Routes"] {
     <<record>>
     -List~Route~ routes
     -Map~String, Component~ components
@@ -572,7 +667,7 @@ classDiagram
     -Integer nextOffset
     -boolean searchLimited
   }
-  class c54["com.smartsca.domain.health.HealthAssessment"] {
+  class c63["com.smartsca.domain.health.HealthAssessment"] {
     <<record>>
     -String componentPurl
     -Evidence~RepositoryAssociation~ repository
@@ -583,12 +678,12 @@ classDiagram
     +HealthAssessment(String componentPurl, Evidence~RepositoryAssociation~ repository, Evidence~ScorecardReport~ scorecard, Map~String, Evidence~Indicator~~ indicators, List~Evidence~String~~ associationEvidence) 
     +unavailable(String purl, String source, EvidenceStatus status, String reason) HealthAssessment
   }
-  class c55["com.smartsca.domain.health.HealthAssessment.RepositoryAssociation"] {
+  class c64["com.smartsca.domain.health.HealthAssessment.RepositoryAssociation"] {
     <<record>>
     -String id
     -String method
   }
-  class c56["com.smartsca.domain.health.HealthAssessment.ScorecardReport"] {
+  class c65["com.smartsca.domain.health.HealthAssessment.ScorecardReport"] {
     <<record>>
     -String repository
     -String repositoryCommit
@@ -597,7 +692,7 @@ classDiagram
     -boolean stale
     -String freshnessPolicy
   }
-  class c57["com.smartsca.domain.health.HealthAssessment.Indicator"] {
+  class c66["com.smartsca.domain.health.HealthAssessment.Indicator"] {
     <<record>>
     -String name
     -int score
@@ -606,21 +701,21 @@ classDiagram
     -String documentationUrl
     +Indicator(String name, int score, String reason, List~String~ details, String documentationUrl) 
   }
-  class c58["com.smartsca.domain.risk.CvssBase"] {
+  class c67["com.smartsca.domain.risk.CvssBase"] {
     -Map~String, List~String~~ V2
     -Map~String, List~String~~ V3
     -Map~String, List~String~~ V4
     -allowed(String definition) Map~String, List~String~~
     ~score(CvssScore value) double
   }
-  class c59["com.smartsca.domain.risk.PriorityLevel"] {
+  class c68["com.smartsca.domain.risk.PriorityLevel"] {
     <<enum>>
     +PriorityLevel CRITICA
     +PriorityLevel ALTA
     +PriorityLevel MEDIA
     +PriorityLevel BAJA
   }
-  class c60["com.smartsca.domain.risk.RiskAssessment"] {
+  class c69["com.smartsca.domain.risk.RiskAssessment"] {
     <<record>>
     -Finding finding
     -String policyVersion
@@ -633,7 +728,7 @@ classDiagram
     -List~String~ limits
     +RiskAssessment(Finding finding, String policyVersion, RiskEvaluationStatus status, Double score, PriorityLevel level, boolean knownExploited, List~RiskContribution~ contributions, List~String~ explanation, List~String~ limits) 
   }
-  class c61["com.smartsca.domain.risk.RiskContribution"] {
+  class c70["com.smartsca.domain.risk.RiskContribution"] {
     <<record>>
     -String dimension
     -double weight
@@ -642,12 +737,12 @@ classDiagram
     -List~Evidence~String~~ usedEvidence
     +RiskContribution(String dimension, double weight, Double points, String rule, List~Evidence~String~~ usedEvidence) 
   }
-  class c62["com.smartsca.domain.risk.RiskEvaluationStatus"] {
+  class c71["com.smartsca.domain.risk.RiskEvaluationStatus"] {
     <<enum>>
     +RiskEvaluationStatus EVALUADO
     +RiskEvaluationStatus PENDIENTE_REVISION
   }
-  class c63["com.smartsca.domain.risk.RiskPolicy"] {
+  class c72["com.smartsca.domain.risk.RiskPolicy"] {
     +String VERSION
     +definition() Definition
     +evaluate(VulnerabilitySnapshot snapshot, DependencyGraph graph, AnalysisConfiguration configuration, Map~String, HealthAssessment~ health) RiskSnapshot
@@ -655,7 +750,7 @@ classDiagram
     -assess(Finding finding, Vulnerability vulnerability, Component component, Set~DependencyGraph.Occurrence~ contexts, AnalysisConfiguration config, HealthAssessment health, Evidence~List~String~~ query, Instant time) RiskAssessment
     -text(Evidence~?~ value) Evidence~String~
   }
-  class c64["com.smartsca.domain.risk.RiskPolicy.Definition"] {
+  class c73["com.smartsca.domain.risk.RiskPolicy.Definition"] {
     <<record>>
     -String version
     -Map~String, Double~ weights
@@ -667,14 +762,14 @@ classDiagram
     -String calculator
     +Definition(String version, Map~String, Double~ weights, Map~String, Double~ thresholds, String formula, List~String~ missingEvidenceRules, List~String~ tieBreakRules, String cvssSelection, String calculator) 
   }
-  class c65["com.smartsca.domain.risk.RiskSnapshot"] {
+  class c74["com.smartsca.domain.risk.RiskSnapshot"] {
     <<record>>
     -RiskPolicy.Definition policy
     -Instant evaluatedAt
     -List~RiskAssessment~ assessments
     +RiskSnapshot(RiskPolicy.Definition policy, Instant evaluatedAt, List~RiskAssessment~ assessments) 
   }
-  class c66["com.smartsca.domain.vulnerability.Advisory"] {
+  class c75["com.smartsca.domain.vulnerability.Advisory"] {
     <<record>>
     -String id
     -Set~String~ aliases
@@ -686,7 +781,7 @@ classDiagram
     -String rawResponse
     +Advisory(String id, Set~String~ aliases, String summary, String description, List~String~ references, List~AffectedPackage~ affected, com.smartsca.domain.Evidence~List~CvssScore~~ cvss, String rawResponse) 
   }
-  class c67["com.smartsca.domain.vulnerability.Advisory.AffectedPackage"] {
+  class c76["com.smartsca.domain.vulnerability.Advisory.AffectedPackage"] {
     <<record>>
     -String ecosystem
     -String name
@@ -696,18 +791,18 @@ classDiagram
     -com.smartsca.domain.Evidence~List~CvssScore~~ cvss
     +AffectedPackage(String ecosystem, String name, String ranges, List~String~ versions, List~String~ fixedVersions, com.smartsca.domain.Evidence~List~CvssScore~~ cvss) 
   }
-  class c68["com.smartsca.domain.vulnerability.Advisory.CvssScore"] {
+  class c77["com.smartsca.domain.vulnerability.Advisory.CvssScore"] {
     <<record>>
     -String version
     -String vector
     -String source
   }
-  class c69["com.smartsca.domain.vulnerability.Finding"] {
+  class c78["com.smartsca.domain.vulnerability.Finding"] {
     <<record>>
     -String componentPurl
     -String vulnerabilityId
   }
-  class c70["com.smartsca.domain.vulnerability.Vulnerability"] {
+  class c79["com.smartsca.domain.vulnerability.Vulnerability"] {
     <<record>>
     -String id
     -Set~String~ aliases
@@ -716,17 +811,17 @@ classDiagram
     -Evidence~Map~String, Evidence~Boolean~~~ kevByCve
     +Vulnerability(String id, Set~String~ aliases, Map~String, Evidence~Advisory~~ advisories, Evidence~Map~String, Evidence~Epss~~~ epssByCve, Evidence~Map~String, Evidence~Boolean~~~ kevByCve) 
   }
-  class c71["com.smartsca.domain.vulnerability.Vulnerability.Epss"] {
+  class c80["com.smartsca.domain.vulnerability.Vulnerability.Epss"] {
     <<record>>
     -double probability
     -double percentile
     +Epss(double probability, double percentile) 
   }
-  class c72["com.smartsca.domain.vulnerability.VulnerabilityCorrelator"] {
+  class c81["com.smartsca.domain.vulnerability.VulnerabilityCorrelator"] {
     -VulnerabilityCorrelator() 
     +correlate(Map~String, Evidence~Advisory~~ advisories) List~Set~String~~
   }
-  class c73["com.smartsca.domain.vulnerability.VulnerabilitySnapshot"] {
+  class c82["com.smartsca.domain.vulnerability.VulnerabilitySnapshot"] {
     <<record>>
     -List~Finding~ findings
     -List~Vulnerability~ vulnerabilities
@@ -749,71 +844,75 @@ flowchart TB
     p5["com.smartsca.adapter.outbound.kev<br/>KevCatalogAdapter"]
     p6["com.smartsca.adapter.outbound.maven<br/>FixtureProjectSource, MavenDependencyResolver, MavenTreeParser, MavenTreeParser.Tree, MavenTreeParser.Artifact"]
     p7["com.smartsca.adapter.outbound.osv<br/>OsvApiAdapter"]
-    p8["com.smartsca.adapter.outbound.persistence<br/>AnalysisEntity, JpaAnalysisRepository"]
-    p9["com.smartsca.adapter.outbound.scorecard<br/>ScorecardHealthAdapter"]
-    p10["com.smartsca.application.port.inbound<br/>GetAnalysisUseCase, GetAnalysisUseCase.ComponentItem, ListAnalysesUseCase, ListAnalysesUseCase.Entry, ListAnalysesUseCase.Page, RunPendingAnalysesUseCase, StartAnalysisUseCase"]
-    p11["com.smartsca.application.port.outbound<br/>AnalysisRepository, DependencyResolver, ExploitSignalsSource, HealthSource, ProjectSource, VulnerabilitySource, VulnerabilitySource.Result"]
-    p12["com.smartsca.application.service<br/>EnrichAnalysisService, QueryAnalysisService, RunAnalysisService, StartAnalysisService"]
-    p13["com.smartsca.configuration<br/>AnalysisConfigurationBeans"]
-    p14["com.smartsca.domain<br/>Evidence, EvidenceStatus"]
-    p15["com.smartsca.domain.analysis<br/>Analysis, AnalysisConfiguration, AnalysisStatus, Project"]
-    p16["com.smartsca.domain.component<br/>Component, DependencyContext, DependencyEdge, DependencyGraph, DependencyGraph.Occurrence, DependencyGraph.Neighborhood, DependencyGraph.Route, DependencyGraph.Routes"]
-    p17["com.smartsca.domain.health<br/>HealthAssessment, HealthAssessment.RepositoryAssociation, HealthAssessment.ScorecardReport, HealthAssessment.Indicator"]
-    p18["com.smartsca.domain.risk<br/>CvssBase, PriorityLevel, RiskAssessment, RiskContribution, RiskEvaluationStatus, RiskPolicy, RiskPolicy.Definition, RiskSnapshot"]
-    p19["com.smartsca.domain.vulnerability<br/>Advisory, Advisory.AffectedPackage, Advisory.CvssScore, Finding, Vulnerability, Vulnerability.Epss, VulnerabilityCorrelator, VulnerabilitySnapshot"]
+    p8["com.smartsca.adapter.outbound.persistence<br/>AnalysisArtifactEntity, AnalysisEntity, JpaAnalysisRepository"]
+    p9["com.smartsca.adapter.outbound.sbom<br/>CycloneDxSbomExporter"]
+    p10["com.smartsca.adapter.outbound.scorecard<br/>ScorecardHealthAdapter"]
+    p11["com.smartsca.application.port.inbound<br/>ExportAnalysisUseCase, ExportAnalysisUseCase.SbomStatus, ExportAnalysisUseCase.ArtifactUnavailableException, GetAnalysisUseCase, GetAnalysisUseCase.ComponentItem, ListAnalysesUseCase, ListAnalysesUseCase.Entry, ListAnalysesUseCase.Page, RunPendingAnalysesUseCase, StartAnalysisUseCase"]
+    p12["com.smartsca.application.port.outbound<br/>AnalysisRepository, DependencyResolver, ExploitSignalsSource, HealthSource, ProjectSource, SbomExporter, VulnerabilitySource, VulnerabilitySource.Result"]
+    p13["com.smartsca.application.service<br/>EnrichAnalysisService, ExportAnalysisService, QueryAnalysisService, RunAnalysisService, RunAnalysisService.Result, StartAnalysisService"]
+    p14["com.smartsca.configuration<br/>AnalysisConfigurationBeans"]
+    p15["com.smartsca.domain<br/>Evidence, EvidenceStatus"]
+    p16["com.smartsca.domain.analysis<br/>Analysis, AnalysisArtifact, AnalysisConfiguration, AnalysisStatus, Project"]
+    p17["com.smartsca.domain.component<br/>Component, DependencyContext, DependencyEdge, DependencyGraph, DependencyGraph.Occurrence, DependencyGraph.Neighborhood, DependencyGraph.Route, DependencyGraph.Routes"]
+    p18["com.smartsca.domain.health<br/>HealthAssessment, HealthAssessment.RepositoryAssociation, HealthAssessment.ScorecardReport, HealthAssessment.Indicator"]
+    p19["com.smartsca.domain.risk<br/>CvssBase, PriorityLevel, RiskAssessment, RiskContribution, RiskEvaluationStatus, RiskPolicy, RiskPolicy.Definition, RiskSnapshot"]
+    p20["com.smartsca.domain.vulnerability<br/>Advisory, Advisory.AffectedPackage, Advisory.CvssScore, Finding, Vulnerability, Vulnerability.Epss, VulnerabilityCorrelator, VulnerabilitySnapshot"]
   end
-  p1 -->|importa| p10
+  p1 -->|importa| p11
+  p10 -->|importa| p12
   p10 -->|importa| p15
-  p11 -->|importa| p10
-  p11 -->|importa| p14
-  p11 -->|importa| p15
+  p10 -->|importa| p17
+  p10 -->|importa| p18
+  p10 -->|importa| p3
   p11 -->|importa| p16
-  p11 -->|importa| p17
-  p11 -->|importa| p19
-  p12 -->|importa| p10
   p12 -->|importa| p11
-  p12 -->|importa| p14
   p12 -->|importa| p15
   p12 -->|importa| p16
-  p12 -->|importa| p19
-  p13 -->|importa| p0
-  p13 -->|importa| p1
-  p13 -->|importa| p10
+  p12 -->|importa| p17
+  p12 -->|importa| p18
+  p12 -->|importa| p20
   p13 -->|importa| p11
   p13 -->|importa| p12
-  p13 -->|importa| p6
-  p13 -->|importa| p8
-  p15 -->|importa| p16
-  p17 -->|importa| p14
-  p18 -->|importa| p14
+  p13 -->|importa| p15
+  p13 -->|importa| p16
+  p13 -->|importa| p17
+  p13 -->|importa| p20
+  p14 -->|importa| p0
+  p14 -->|importa| p1
+  p14 -->|importa| p11
+  p14 -->|importa| p12
+  p14 -->|importa| p13
+  p14 -->|importa| p6
+  p14 -->|importa| p8
+  p16 -->|importa| p17
   p18 -->|importa| p15
-  p18 -->|importa| p16
-  p18 -->|importa| p17
-  p18 -->|importa| p19
-  p19 -->|importa| p14
-  p2 -->|importa| p10
-  p2 -->|importa| p15
-  p4 -->|importa| p14
+  p19 -->|importa| p15
+  p19 -->|importa| p16
+  p19 -->|importa| p17
+  p19 -->|importa| p18
+  p19 -->|importa| p20
+  p2 -->|importa| p11
+  p2 -->|importa| p16
+  p20 -->|importa| p15
+  p4 -->|importa| p15
   p4 -->|importa| p3
-  p5 -->|importa| p14
+  p5 -->|importa| p15
   p5 -->|importa| p3
-  p6 -->|importa| p11
-  p6 -->|importa| p15
+  p6 -->|importa| p12
   p6 -->|importa| p16
-  p7 -->|importa| p11
-  p7 -->|importa| p14
-  p7 -->|importa| p16
-  p7 -->|importa| p19
+  p6 -->|importa| p17
+  p7 -->|importa| p12
+  p7 -->|importa| p15
+  p7 -->|importa| p17
+  p7 -->|importa| p20
   p7 -->|importa| p3
-  p8 -->|importa| p10
   p8 -->|importa| p11
-  p8 -->|importa| p15
+  p8 -->|importa| p12
   p8 -->|importa| p16
-  p9 -->|importa| p11
-  p9 -->|importa| p14
+  p8 -->|importa| p17
+  p9 -->|importa| p12
   p9 -->|importa| p16
   p9 -->|importa| p17
-  p9 -->|importa| p3
 ```
 
 ### Diagrama de despliegue
