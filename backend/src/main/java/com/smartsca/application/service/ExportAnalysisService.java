@@ -61,8 +61,8 @@ public final class ExportAnalysisService implements ExportAnalysisUseCase {
     }
     private static boolean available(Evidence<?> evidence) { return evidence != null && evidence.status() == EvidenceStatus.DISPONIBLE; }
     private Optional<AnalysisArtifact> saved(UUID id) {
-        var analysis = analyses.get(id).orElseThrow(NoSuchElementException::new);
-        if (analysis.finishedAt() == null || analysis.dependencyGraph() == null) return Optional.empty();
+        var status = analyses.readStatus(id).orElseThrow(NoSuchElementException::new);
+        if (status.finishedAt() == null || !status.graphAvailable()) return Optional.empty();
         try { return analyses.readSbom(id); }
         catch (IllegalArgumentException error) { return Optional.empty(); }
     }

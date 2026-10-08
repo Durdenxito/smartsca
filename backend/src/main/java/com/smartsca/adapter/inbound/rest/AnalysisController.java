@@ -48,6 +48,10 @@ public class AnalysisController {
         return ResponseEntity.accepted().location(URI.create("/api/analyses/" + id)).body(new Accepted(id, AnalysisStatus.EN_COLA));
     }
     @GetMapping("/analyses/{id}") public Analysis get(@PathVariable UUID id) { return query.get(id); }
+    @GetMapping("/analyses/{id}/status") public GetAnalysisUseCase.Status status(@PathVariable UUID id) { return query.status(id); }
+    @GetMapping("/analyses/{id}/resolution") public GetAnalysisUseCase.Resolution resolution(@PathVariable UUID id) { return query.resolution(id); }
+    @GetMapping("/analyses/{id}/sources") public GetAnalysisUseCase.Sources sources(@PathVariable UUID id) { return query.sources(id); }
+    @GetMapping("/analyses/{id}/inventory") public GetAnalysisUseCase.Inventory inventory(@PathVariable UUID id) { return query.inventory(id); }
     @GetMapping("/analyses/{id}/export") public ResponseEntity<ExportAnalysisUseCase.JsonExport> export(@PathVariable UUID id) {
         return ResponseEntity.ok().header("Content-Type", "application/json")
             .header("Content-Disposition", "attachment; filename=\"smartsca-" + id + "-analysis-v1.json\"")

@@ -1,7 +1,7 @@
 import { type Analysis, type Evidence } from '../api/client';
 
 /** Summarizes stored observations, including inner CVE/check failures; reading never queries providers. */
-export default function SourceAvailability({ analysis }: { analysis: Analysis }) {
+export default function SourceAvailability({ analysis }: { analysis: Pick<Analysis, 'status' | 'vulnerabilitySnapshot' | 'healthAssessments'> }) {
   const snapshot = analysis.vulnerabilitySnapshot;
   const vulnerabilities = snapshot?.vulnerabilities ?? [];
   const health = Object.entries(analysis.healthAssessments ?? {});

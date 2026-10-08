@@ -9,6 +9,10 @@ const record = {
   status: 'PARCIAL', currentStep: 'INVENTARIO_Y_EVIDENCIAS_DISPONIBLES', createdAt: '2026-10-07T00:00:00Z', startedAt: '2026-10-07T00:00:01Z', finishedAt: '2026-10-07T00:00:05Z',
   diagnostics: ['Prioridad y SBOM pendientes.'], environmentVersions: {}, dependencyGraph: null, vulnerabilitySnapshot: null, healthAssessments: null,
 };
+const statusView = (value: Record<string, unknown>) => {
+  const { project, dependencyGraph, vulnerabilitySnapshot, healthAssessments, ...metadata } = value;
+  return { ...metadata, projectName: (project as { name: string }).name, graphAvailable: dependencyGraph != null, vulnerabilitiesAvailable: vulnerabilitySnapshot != null };
+};
 
 test('summarizes stored source observations including inner failures, absence and stale reports after reload', async ({ page }) => {
   const advisory = observation('DISPONIBLE', { id: 'GHSA-demo' });
@@ -34,7 +38,9 @@ test('summarizes stored source observations including inner failures, absence an
   const requests: string[] = [];
   await page.route('**/api/analyses/**', route => {
     requests.push(route.request().url());
-    return route.request().url().endsWith(`/api/analyses/${id}`) ? route.fulfill({ json: snapshot }) : route.abort();
+    const url = route.request().url();
+    return url.endsWith(`/api/analyses/${id}/status`) ? route.fulfill({ json: statusView(snapshot) })
+      : url.endsWith(`/api/analyses/${id}/sources`) ? route.fulfill({ json: { vulnerabilitySnapshot: snapshot.vulnerabilitySnapshot, healthAssessments: snapshot.healthAssessments } }) : route.abort();
   });
   await page.goto(`/#analysis/${id}`);
   const table = page.getByRole('table', { name: 'Disponibilidad y diagnóstico por fuente', exact: true });
@@ -64,27 +70,51 @@ test('summarizes stored source observations including inner failures, absence an
   await expect(row(/^FIRST EPSS/)).toContainText('ERROR: 1');
   await expect(row(/^OpenSSF Scorecard/)).toContainText('1 informes antiguos');
   expect(requests.length).toBeGreaterThanOrEqual(2);
-  expect(requests.every(url => url.endsWith(`/api/analyses/${id}`))).toBe(true);
+  expect(requests.every(url => url.endsWith(`/api/analyses/${id}/status`) || url.endsWith(`/api/analyses/${id}/sources`))).toBe(true);
+  expect(requests.filter(url => url.endsWith('/sources'))).toHaveLength(2);
 });
 
 test('polls queued and running states then preserves terminal failure diagnostics and legacy missing observations', async ({ page }) => {
   let response = { ...record, status: 'EN_COLA', currentStep: 'REGISTRADO', startedAt: null as string | null, finishedAt: null as string | null, diagnostics: [] as string[] };
-  await page.route(`**/api/analyses/${id}`, route => route.fulfill({ json: response }));
+  let sourceReads = 0;
+  await page.route(`**/api/analyses/${id}/status`, route => route.fulfill({ json: statusView(response) }));
+  await page.route(`**/api/analyses/${id}/sources`, route => {
+    sourceReads++;
+    return route.fulfill({ json: { vulnerabilitySnapshot: null, healthAssessments: null } });
+  });
   await page.goto(`/#analysis/${id}`);
   const table = page.getByRole('table', { name: 'Disponibilidad y diagnóstico por fuente', exact: true });
   await expect(page.getByRole('status')).toHaveText('EN_COLA');
   await expect(table.getByText('Aún sin observaciones guardadas.', { exact: true })).toHaveCount(4);
   response = { ...response, status: 'EN_EJECUCION', currentStep: 'RESOLVIENDO_MAVEN', startedAt: record.startedAt };
   await expect(page.getByRole('status')).toHaveText('EN_EJECUCION', { timeout: 8_000 });
+  expect(sourceReads).toBe(0);
   response = { ...response, status: 'FALLIDO', currentStep: 'RESOLUCION_FALLIDA', finishedAt: record.finishedAt, diagnostics: ['Se agotó el tiempo de resolución Maven.'] };
   await expect(page.getByRole('status')).toHaveText('FALLIDO', { timeout: 8_000 });
   await expect(page.getByText('Se agotó el tiempo de resolución Maven.', { exact: true })).toBeVisible();
   await expect(table.getByText('Sin observaciones en esta instantánea.', { exact: true })).toHaveCount(4);
   await expect(table).not.toContainText('DISPONIBLE: 0');
+  expect(sourceReads).toBe(1);
   await page.reload();
   await expect(page.getByRole('status')).toHaveText('FALLIDO');
   response = { ...response, status: 'COMPLETO', currentStep: 'FINALIZADO', diagnostics: [] };
   await page.reload();
   await expect(page.getByRole('status')).toHaveText('COMPLETO');
   await expect(table.getByText('Sin observaciones en esta instantánea.', { exact: true })).toHaveCount(4);
+});
+
+test('keeps terminal metadata visible when source diagnostics fail and can retry without showing false availability', async ({ page }) => {
+  let failure = true;
+  await page.route(`**/api/analyses/${id}/status`, route => route.fulfill({ json: statusView(record) }));
+  await page.route(`**/api/analyses/${id}/sources`, route => failure
+    ? route.fulfill({ status: 503, json: { detail: 'Diagnóstico temporalmente no disponible.' } })
+    : route.fulfill({ json: { vulnerabilitySnapshot: null, healthAssessments: null } }));
+  await page.goto(`/#analysis/${id}`);
+  await expect(page.getByRole('status')).toHaveText('PARCIAL');
+  await expect(page.getByRole('alert')).toContainText('Diagnóstico temporalmente no disponible.');
+  await expect(page.getByRole('table', { name: 'Disponibilidad y diagnóstico por fuente', exact: true })).toHaveCount(0);
+  failure = false;
+  await page.getByRole('button', { name: 'Reintentar consulta', exact: true }).click();
+  await expect(page.getByText('Sin observaciones en esta instantánea.', { exact: true })).toHaveCount(4);
+  await expect(page.getByRole('alert')).toHaveCount(0);
 });

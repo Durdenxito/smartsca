@@ -46,6 +46,14 @@ export interface AnalysisHistory {
   offset: number; nextOffset: number | null; navigationLimited: boolean;
 }
 
+export type AnalysisStatusView = Pick<Analysis, 'id' | 'configuration' | 'status' | 'currentStep' | 'createdAt' | 'startedAt' | 'finishedAt' | 'diagnostics' | 'environmentVersions'>
+  & { projectName: string; graphAvailable: boolean; vulnerabilitiesAvailable: boolean };
+export type AnalysisSources = Pick<Analysis, 'vulnerabilitySnapshot' | 'healthAssessments'>;
+export type AnalysisResolution = Pick<Analysis, 'status' | 'dependencyGraph'> & { projectName: string; scopes: string[] };
+export type AnalysisInventory = Pick<Analysis, 'status' | 'healthAssessments'> & {
+  projectName: string; scopes: string[]; rootsByModule: Record<string, string>; items: ComponentItem[]; vulnerabilitiesAvailable: boolean;
+};
+
 export interface RiskAssessment {
   finding: { componentPurl: string; vulnerabilityId: string }; policyVersion: string;
   status: 'EVALUADO' | 'PENDIENTE_REVISION'; score: number | null; level: 'CRITICA' | 'ALTA' | 'MEDIA' | 'BAJA' | null;

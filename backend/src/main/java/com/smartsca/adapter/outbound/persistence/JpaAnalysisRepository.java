@@ -2,6 +2,12 @@ package com.smartsca.adapter.outbound.persistence;
 
 import com.smartsca.application.port.outbound.AnalysisRepository;
 import com.smartsca.application.port.inbound.ListAnalysesUseCase;
+import com.smartsca.application.port.inbound.GetAnalysisUseCase;
+import com.smartsca.domain.component.DependencyGraph;
+import com.smartsca.domain.health.HealthAssessment;
+import com.smartsca.domain.vulnerability.VulnerabilitySnapshot;
+import java.util.List;
+import java.util.Map;
 import com.smartsca.domain.analysis.AnalysisConfiguration;
 import java.util.Set;
 import java.util.Arrays;
@@ -21,6 +27,39 @@ public class JpaAnalysisRepository implements AnalysisRepository {
     @Override @Transactional public void save(Analysis analysis) { manager.persist(AnalysisEntity.from(analysis)); }
     @Override @Transactional(readOnly = true) public Optional<Analysis> get(UUID id) {
         return Optional.ofNullable(manager.find(AnalysisEntity.class, id)).map(AnalysisEntity::toDomain);
+    }
+    private Optional<Object[]> row(String columns, UUID id) {
+        return manager.createQuery("select " + columns + " from AnalysisEntity e where e.id = :id", Object[].class)
+            .setParameter("id", id).getResultList().stream().findFirst();
+    }
+    @SuppressWarnings("unchecked")
+    @Override @Transactional(readOnly = true) public Optional<GetAnalysisUseCase.Status> readStatus(UUID id) {
+        return row("""
+            e.projectName, e.modules, e.profiles, e.scopes, e.environmentId, e.declaredDeployment,
+            e.status, e.currentStep, e.createdAt, e.startedAt, e.finishedAt, e.diagnostics, e.environmentVersions,
+            e.dependencyGraph is not null, e.vulnerabilitySnapshot is not null
+            """, id).map(value -> new GetAnalysisUseCase.Status(id, (String) value[0],
+                new AnalysisConfiguration(Set.copyOf(Arrays.asList((String[]) value[1])), Set.copyOf(Arrays.asList((String[]) value[2])),
+                    Set.copyOf(Arrays.asList((String[]) value[3])), (String) value[4], (String) value[5]),
+                (AnalysisStatus) value[6], (String) value[7], (Instant) value[8], (Instant) value[9], (Instant) value[10],
+                List.copyOf(Arrays.asList((String[]) value[11])), (Map<String, String>) value[12], (Boolean) value[13], (Boolean) value[14]));
+    }
+    private static GetAnalysisUseCase.Resolution resolution(Object[] value) {
+        return new GetAnalysisUseCase.Resolution((String) value[0], (AnalysisStatus) value[1],
+            Set.copyOf(Arrays.asList((String[]) value[2])), (DependencyGraph) value[3]);
+    }
+    @Override @Transactional(readOnly = true) public Optional<GetAnalysisUseCase.Resolution> readResolution(UUID id) {
+        return row("e.projectName, e.status, e.scopes, e.dependencyGraph", id).map(JpaAnalysisRepository::resolution);
+    }
+    @SuppressWarnings("unchecked")
+    @Override @Transactional(readOnly = true) public Optional<GetAnalysisUseCase.Sources> readSources(UUID id) {
+        return row("e.vulnerabilitySnapshot, e.healthAssessments", id).map(value ->
+            new GetAnalysisUseCase.Sources((VulnerabilitySnapshot) value[0], (Map<String, HealthAssessment>) value[1]));
+    }
+    @SuppressWarnings("unchecked")
+    @Override @Transactional(readOnly = true) public Optional<InventorySnapshot> readInventory(UUID id) {
+        return row("e.projectName, e.status, e.scopes, e.dependencyGraph, e.healthAssessments, e.vulnerabilitySnapshot is not null", id)
+            .map(value -> new InventorySnapshot(resolution(value), (Map<String, HealthAssessment>) value[4], (Boolean) value[5]));
     }
     @Override @Transactional(readOnly = true) public ListAnalysesUseCase.Page list(String projectId, AnalysisStatus status, int offset) {
         var query = manager.createQuery("""

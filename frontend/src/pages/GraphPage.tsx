@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { request, errorMessage, type Analysis, type Component, type Neighborhood, type Routes } from '../api/client';
+import { request, errorMessage, type AnalysisResolution, type Component, type Neighborhood, type Routes } from '../api/client';
 import AnalysisNotice from '../components/AnalysisNotice';
 
 /** A bounded neighborhood and textual routes from the saved snapshot; no tool or external API runs here. */
 export default function GraphPage({ id, initialPurl = '' }: { id: string; initialPurl?: string }) {
-  const [analysis, setAnalysis] = useState<Analysis>();
+  const [analysis, setAnalysis] = useState<AnalysisResolution>();
   const [module, setModule] = useState('');
   const [focus, setFocus] = useState(initialPurl);
   const [search, setSearch] = useState('');
@@ -25,7 +25,7 @@ export default function GraphPage({ id, initialPurl = '' }: { id: string; initia
   useEffect(() => {
     const controller = new AbortController();
     setError('');
-    request<Analysis>(`/analyses/${encodeURIComponent(id)}`, { signal: controller.signal }).then(value => {
+    request<AnalysisResolution>(`/analyses/${encodeURIComponent(id)}/resolution`, { signal: controller.signal }).then(value => {
       if (controller.signal.aborted) return;
       if (!value.dependencyGraph) throw new Error('El grafo todavía no está disponible.');
       const graph = value.dependencyGraph;
@@ -97,7 +97,7 @@ export default function GraphPage({ id, initialPurl = '' }: { id: string; initia
     {error && <p role="alert" className="error">{error}</p>}
     {!analysis && !error && <p role="status">Cargando grafo…</p>}
     {analysis && snapshot && <>
-      <p>{analysis.project.name} · Estado: {analysis.status}</p>
+      <p>{analysis.projectName} · Estado: {analysis.status}</p>
       <AnalysisNotice status={analysis.status} />
       <p><a href={`#analysis/${id}/summary`}>Consultar resumen y cobertura</a></p>
       <p className="muted">Consulta la salud en el inventario y la prioridad guardada en los hallazgos. La profundidad y la transitividad no indican menor riesgo.</p>

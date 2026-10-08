@@ -23,7 +23,8 @@ test('keeps published fixes with their exact package/advisory source, migration 
   ])) });
   await page.route('**/api/analyses/**', route => {
     const url = new URL(route.request().url()); requests.push({ method: route.request().method(), path: url.pathname });
-    const value = url.pathname.endsWith('/components') ? items : url.pathname.endsWith('/graph')
+    const value = url.pathname.endsWith('/resolution') ? { projectName: data.project.name, status: data.status, scopes: data.configuration.scopes, dependencyGraph: data.dependencyGraph }
+      : url.pathname.endsWith('/components') ? items : url.pathname.endsWith('/graph')
       ? { module: '.', root, focus: library, neighbors: [root], edges: [edges[0]], offset: 0, totalNeighbors: 1, nextOffset: null }
       : url.pathname.endsWith('/routes') ? { routes: [{ module: '.', rootPurl: root.purl, steps: [edges[0]] }, { module: 'app', rootPurl: root.purl, steps: edges.slice(1) }], components: data.dependencyGraph.components, offset: 0, nextOffset: null, searchLimited: false } : data;
     return route.fulfill({ json: value });

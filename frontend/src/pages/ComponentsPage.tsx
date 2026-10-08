@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { request, errorMessage, type Analysis, type ComponentItem } from '../api/client';
+import { request, errorMessage, type AnalysisInventory, type ComponentItem } from '../api/client';
 import HealthDetails from '../components/HealthDetails';
 import AnalysisNotice from '../components/AnalysisNotice';
 
 export default function ComponentsPage({ id }: { id: string }) {
-  const [analysis, setAnalysis] = useState<Analysis>();
+  const [analysis, setAnalysis] = useState<AnalysisInventory>();
   const [items, setItems] = useState<ComponentItem[]>([]);
   const [search, setSearch] = useState('');
   const [module, setModule] = useState('');
@@ -17,10 +17,9 @@ export default function ComponentsPage({ id }: { id: string }) {
   useEffect(() => {
     const controller = new AbortController();
     setError('');
-    Promise.all([
-      request<Analysis>(`/analyses/${encodeURIComponent(id)}`, { signal: controller.signal }),
-      request<ComponentItem[]>(`/analyses/${encodeURIComponent(id)}/components`, { signal: controller.signal }),
-    ]).then(([analysis, items]) => { setAnalysis(analysis); setItems(items); })
+    setAnalysis(undefined); setItems([]);
+    request<AnalysisInventory>(`/analyses/${encodeURIComponent(id)}/inventory`, { signal: controller.signal })
+      .then(value => { if (!controller.signal.aborted) { setAnalysis(value); setItems(value.items); } })
       .catch(error => { if (!controller.signal.aborted) setError(errorMessage(error)); });
     return () => controller.abort();
   }, [id, retry]);
@@ -39,18 +38,18 @@ export default function ComponentsPage({ id }: { id: string }) {
     {error && <><p role="alert" className="error">{error}</p><button onClick={() => setRetry(value => value + 1)}>Reintentar</button></>}
     {!analysis && !error && <p role="status">Cargando inventario…</p>}
     {analysis && <>
-      <p>{analysis.project.name} · Estado: {analysis.status}</p>
+      <p>{analysis.projectName} · Estado: {analysis.status}</p>
       <AnalysisNotice status={analysis.status} />
       <p><a href={`#analysis/${id}/summary`}>Consultar resumen y cobertura</a></p>
       <p className="muted">Este inventario refleja la resolución Maven guardada. Consulta la salud y disponibilidad de evidencias por componente; las prioridades y sus limitaciones están en los hallazgos.</p>
-      {analysis.vulnerabilitySnapshot && <p><a href={`#analysis/${id}/findings`}>Revisar vulnerabilidades y evidencias</a></p>}
+      {analysis.vulnerabilitiesAvailable && <p><a href={`#analysis/${id}/findings`}>Revisar vulnerabilidades y evidencias</a></p>}
       <div className="filters">
         <label>Buscar componente<input type="search" maxLength={256} value={search} onChange={event => { setSearch(event.target.value); setPage(0); }} /></label>
         <label>Filtrar por módulo<select value={module} onChange={event => { setModule(event.target.value); setPage(0); }}>
-          <option value="">Todos</option>{Object.keys(analysis.dependencyGraph!.rootsByModule).sort().map(module => <option key={module}>{module}</option>)}
+          <option value="">Todos</option>{Object.keys(analysis.rootsByModule).sort().map(module => <option key={module}>{module}</option>)}
         </select></label>
         <label>Filtrar por scope<select value={scope} onChange={event => { setScope(event.target.value); setPage(0); }}>
-          <option value="">Todos</option>{[...analysis.configuration.scopes].sort().map(scope => <option key={scope}>{scope}</option>)}
+          <option value="">Todos</option>{[...analysis.scopes].sort().map(scope => <option key={scope}>{scope}</option>)}
         </select></label>
         <label>Filtrar por condición<select value={direct} onChange={event => { setDirect(event.target.value); setPage(0); }}>
           <option value="">Todas</option><option value="true">Directa</option><option value="false">Transitiva</option>
@@ -62,7 +61,7 @@ export default function ComponentsPage({ id }: { id: string }) {
         <thead><tr><th scope="col">Componente / Package URL</th><th scope="col">Ecosistema</th><th scope="col">Versión</th><th scope="col">Módulo · Scope · Condición</th></tr></thead>
         <tbody>{filtered.slice(current * 50, (current + 1) * 50).map(item => <tr key={item.component.purl}>
           <td><strong>{item.component.name}</strong><p><a href={`#analysis/${id}/graph?component=${encodeURIComponent(item.component.purl)}`}>Ver grafo y rutas de {item.component.name}</a></p>
-            {analysis.vulnerabilitySnapshot && <p><a href={`#analysis/${id}/findings?component=${encodeURIComponent(item.component.purl)}`}>Ver evidencias de {item.component.name}</a></p>}
+            {analysis.vulnerabilitiesAvailable && <p><a href={`#analysis/${id}/findings?component=${encodeURIComponent(item.component.purl)}`}>Ver evidencias de {item.component.name}</a></p>}
             <details><summary>Package URL y metadatos</summary><code>{item.component.purl}</code>
             <dl>{Object.entries(item.component.metadata).filter(([, value]) => value).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}</dl>
           </details><HealthDetails assessment={analysis.healthAssessments?.[item.component.purl]} /></td>

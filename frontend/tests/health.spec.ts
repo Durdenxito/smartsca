@@ -13,10 +13,9 @@ test('shows the recovered report first and keeps missing version metadata in tec
     associationEvidence: [{ ...available(null), status: 'NO_DISPONIBLE', source: 'https://api.deps.dev/v3/systems/maven/packages/demo%3Alibrary/versions/1',
       diagnostic: 'deps.dev no tiene registrada esta versión (HTTP 404); se consulta su POM publicado.' }, available('<project>SCM conservado</project>')],
   };
-  await page.route(`**/api/analyses/${id}/components`, async route => route.fulfill({ json: [item] }));
-  await page.route(`**/api/analyses/${id}`, async route => route.fulfill({ json: {
-    id, project: { name: 'Referencia HTTP de salud' }, status: 'PARCIAL', configuration: { scopes: ['compile'] },
-    dependencyGraph: { rootsByModule: { '.': purl } }, vulnerabilitySnapshot: null, healthAssessments: { [purl]: assessment },
+  await page.route(`**/api/analyses/${id}/inventory`, async route => route.fulfill({ json: {
+    projectName: 'Referencia HTTP de salud', status: 'PARCIAL', scopes: ['compile'], rootsByModule: { '.': purl },
+    items: [item], vulnerabilitiesAvailable: false, healthAssessments: { [purl]: assessment },
   } }));
   await page.goto(`/#analysis/${id}/components`);
   await page.getByText('Salud del repositorio · 2 de 4 indicadores disponibles', { exact: true }).click();
@@ -45,13 +44,12 @@ test('keeps the failure visible when no repository report was obtained', async (
   const id = '22222222-2222-2222-2222-222222222223', purl = 'pkg:maven/demo/missing@1';
   const absent = { source: 'https://repo.maven.apache.org/maven2/demo/missing/1/missing-1.pom', collectedAt: '2026-10-07T00:00:00Z',
     sourceDate: null, status: 'NO_DISPONIBLE', value: null, diagnostic: 'El POM publicado tampoco está disponible (HTTP 404).' };
-  await page.route(`**/api/analyses/${id}/components`, route => route.fulfill({ json: [{
+  const item = {
     component: { purl, name: 'demo:missing', version: '1', ecosystem: 'maven', metadata: {} },
     contexts: [{ module: '.', scope: 'compile', originalScope: 'compile', direct: true }],
-  }] }));
-  await page.route(`**/api/analyses/${id}`, route => route.fulfill({ json: {
-    id, project: { name: 'Sin informe' }, status: 'PARCIAL', configuration: { scopes: ['compile'] },
-    dependencyGraph: { rootsByModule: { '.': purl } }, vulnerabilitySnapshot: null,
+  };
+  await page.route(`**/api/analyses/${id}/inventory`, route => route.fulfill({ json: {
+    projectName: 'Sin informe', status: 'PARCIAL', scopes: ['compile'], rootsByModule: { '.': purl }, items: [item], vulnerabilitiesAvailable: false,
     healthAssessments: { [purl]: { componentPurl: purl, repository: absent, scorecard: absent,
       indicators: Object.fromEntries(['Maintained', 'Security-Policy', 'Code-Review', 'Dependency-Update-Tool'].map(name => [name, absent])),
       associationEvidence: [absent] } },
