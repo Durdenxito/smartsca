@@ -114,7 +114,7 @@ class QualityReportsTests(unittest.TestCase):
             output.write_text(json.dumps(dict(vulnerabilities=[issue, issue], dependencyCount=2, packageManager='test')))
             return SimpleNamespace(returncode=1 if kwargs['cwd'] == 'backend' else frontend_code)
         for frontend_code in (1, 2):
-            with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'SNYK_TOKEN': 'unit-test-token', 'GITHUB_EVENT_NAME': 'push'}), \
+            with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'SNYK_TOKEN': 'unit-test-token', 'GITHUB_EVENT_NAME': 'push', 'GITHUB_SHA': 'unit-test-commit'}), \
                     patch('scan.shutil.which', return_value='snyk-test'), patch('scan.subprocess.run', side_effect=scan_command):
                 result = snyk(Path(directory))
             self.assertEqual('COMPLETO' if frontend_code == 1 else 'INCOMPLETO', result['status'])

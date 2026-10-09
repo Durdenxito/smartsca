@@ -141,7 +141,7 @@ def main():
             client = Sonar(host, token)
             result['serverVersion'] = client.get('system/status')['version']
             result['scannerVersion'] += '/server-' + result['serverVersion']
-            wrapper = 'mvnw.cmd' if os.name == 'nt' else './mvnw'
+            wrapper = str(Path('backend/mvnw.cmd').resolve()) if os.name == 'nt' else './mvnw'
             command = [wrapper, '-B', '-ntp', 'test-compile',
                        f'org.sonarsource.scanner.maven:sonar-maven-plugin:{SCANNER_VERSION}:sonar',
                        '-Dsonar.projectKey=' + key, '-Dsonar.sources=src/main', '-Dsonar.tests=src/test',
